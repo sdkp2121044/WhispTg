@@ -32,3 +32,6 @@ A Telegram bot for sending anonymous secret messages that only the intended reci
 - `/clone` - Clone your own bot
 - `/mybots` - View your cloned bots
 - `/remove` - Remove your bots
+
+## Support 
+[![Telegram](https://img.shields.io/badge/Telegram-Support_Channel-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/shribots)
