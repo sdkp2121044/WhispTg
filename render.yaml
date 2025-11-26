@@ -13,4 +13,4 @@ services:
       - key: BOT_TOKEN
         value: "8314503581:AAEm5TvIs_-qn23VfOCnfVL1dTRwwDtpi8A"
       - key: ADMIN_ID
-        value: "8272213732"
+        value: "8385462088"
