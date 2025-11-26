@@ -115,15 +115,15 @@ HELP_TEXT = """
 📖 **How to Use Whisper Bot**
 
 **1. Inline Mode:**
-   • Type `@{bot_username}` in any chat
+   • Type `@Upspbot` in any chat
    • Write your message  
    • Add @username OR user ID at end
    • Send!
 
 **2. Examples:**
-   • `@{bot_username} Hello! @username`
-   • `@{bot_username} I miss you 123456789`
-   • `@{bot_username} Hello everyone!` - Anyone can read
+   • `@upspbot Hello! @username`
+   • `@upspbot I miss you 123456789`
+   • `@upspbot Hello everyone!` - Anyone can read
 
 **3. Commands:**
    • /start - Start bot
