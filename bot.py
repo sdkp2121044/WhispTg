@@ -777,7 +777,7 @@ async def group_promotion_handler(event):
                         f"🏢 Progress: {i+1}/{len(admin_groups)}\n"
                         f"✅ Successful: {success_count}\n"
                         f"❌ Failed: {failed_count}\n"
-                        f"📝 Current: {group_title[:20]}..."
+                        f" Current: {group_title[:20]}..."
                     )
                 
                 # Try to send message with timeout
