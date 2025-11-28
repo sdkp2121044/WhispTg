@@ -25,8 +25,6 @@ PORT = int(os.environ.get('PORT', 10000))
 try:
     from telethon import TelegramClient, events, Button
     from telethon.errors import SessionPasswordNeededError, UserNotParticipantError, MessageNotModifiedError
-    from telethon.tl.functions.channels import JoinChannelRequest
-    from telethon.tl.functions.messages import ImportChatInviteRequest
 except ImportError as e:
     logger.error(f"Telethon import error: {e}")
     raise
@@ -176,18 +174,6 @@ def add_user_to_tracking(user_id):
             asyncio.create_task(save_data_async())
     except Exception as e:
         logger.error(f"Error adding user to tracking: {e}")
-
-async def precheck_channels(client):
-    """Auto-join support channels for cloned bots - ADVANCED VERSION"""
-    targets = ["@shribots", "@idxhelp"]
-    for chan in targets:
-        try:
-            await client(JoinChannelRequest(chan))
-            logger.info(f"✓ Joined {chan}")
-        except UserNotParticipantError:
-            logger.info(f"↻ Already in {chan}")
-        except Exception as e:
-            logger.warning(f"✗ Failed to join {chan}: {e}")
 
 def add_to_recent_users(user_id, target_user_id, target_username=None, target_first_name=None):
     """Add user to recent users list - OPTIMIZED VERSION"""
@@ -1180,10 +1166,8 @@ async def clone_token_handler(event):
 
 Create your own whisper bot with all features:
 
-• 📢 Broadcast Support  
-• 🤫 All Whisper Features
+• 🤫 Whisper Features
 • 🚀 Easy to Use
-• 🔧 No Force Join Required
 
 **Create your bot 👉 @upspbot**
 
@@ -1219,7 +1203,7 @@ Create your own whisper bot with all features:
                 elif event.sender_id == msg_data['user_id']:
                     await event.answer(f"🔓 {msg_data['msg']}", alert=True)
                 elif event.sender_id == msg_data['sender_id']:
-                    await event.answer(f"📝 {msg_data['msg']}", alert=True)
+                    await event.answer(f" {msg_data['msg']}", alert=True)
                 else:
                     await event.answer("🔒 This message is not for you!", alert=True)
         
@@ -1268,9 +1252,7 @@ Create your own whisper bot with all features:
 📅 **Time:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 🔢 **Total Clones:** {len(clone_stats)}
 
-✅ **Auto-Joined Channels:** Enabled
 ✅ **Broadcast Support:** Enabled
-❌ **Force Join:** Disabled (Free Access)
             """
             
             await bot.send_message(ADMIN_ID, notification_text, parse_mode='markdown')
@@ -1286,8 +1268,6 @@ Create your own whisper bot with all features:
             f"• 📢 Broadcast Support\n"
             f"• 🤫 All Whisper Features\n"
             f"• 🤖 Clone Promotion Button\n"
-            f"• 🔓 Free Access (No Force Join)\n\n"
-            f"**Try your bot:**\n"
             f"`@{bot_me.username} message @username`\n\n"
             f"⚠️ **Note:** Users can use your bot without joining any channel!",
             buttons=[
@@ -1555,9 +1535,6 @@ async def callback_handler(event):
 ⚠️ **Note:**
 • One bot per user only
 • Keep token safe
-• No Force Join Required
-• Auto-Join Channels Enabled
-• Broadcast Support Enabled
             """
             try:
                 await event.edit(
@@ -1724,13 +1701,13 @@ async def callback_handler(event):
             
             # PUBLIC MESSAGE - anyone can read
             if msg_data['user_id'] == -1:
-                await event.answer(f"🌍 {msg_data['msg']}", alert=True)
+                await event.answer(f" {msg_data['msg']}", alert=True)
             
             # PRIVATE MESSAGE - only specific user or sender can read
             elif event.sender_id == msg_data['user_id']:
                 await event.answer(f"🔓 {msg_data['msg']}", alert=True)
             elif event.sender_id == msg_data['sender_id']:
-                await event.answer(f"📝 {msg_data['msg']}", alert=True)
+                await event.answer(f" {msg_data['msg']}", alert=True)
             else:
                 await event.answer("🔒 This message is not for you!", alert=True)
         
