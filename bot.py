@@ -1481,6 +1481,12 @@ async def callback_handler(event):
 • `/broadcast -noclone` - Skip cloned bots
 • `/broadcast -nochat` - Skip group chats
 
+**Extra point:**
+• `/stats` - Your statistics
+• `/allwhispers` - View all whispers
+• `/stop_broadcast` - Stop broadcast
+
+
 **Targets:**
 1. 👥 All Main Bot Users
 2. 🤖 All Cloned Bots (they forward to their users)
