@@ -158,12 +158,9 @@ HELP_TEXT = """
 **4. Commands:**
    • /start - Start bot
    • /help - Show help
-   • /stats - Your statistics
    • /clone - Clone your own bot
    • /remove - Remove your cloned bot
-   • /allwhispers - View all whispers (Owner only)
-   • /broadcast - Send message to all users + cloned bots (Owner only)
-   • /stop_broadcast - Stop broadcast (Owner only)
+   • /broadcast - Paid Promotion (Owner only)
 
 🔒 **Only the mentioned user can read your message!**
 🌍 **If no user mentioned, anyone can read!**
