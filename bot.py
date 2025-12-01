@@ -815,9 +815,9 @@ async def start_handler(event):
             await event.reply(
                 WELCOME_TEXT,
                 buttons=[
-                    [Button.url("📢 Channel", f"https://t.me/{SUPPORT_CHANNEL}")], Button.url("👥 Support", f"https://t.me/{SUPPORT_GROUP}")], Button.inline("📊 Stats", data="user_stats")]
+                    [Button.url("📢 Channel", f"https://t.me/{SUPPORT_CHANNEL}")], Button.url("👥 Support", f"https://t.me/{SUPPORT_GROUP}")],
                     [Button.switch_inline("🚀 Send Whisper", query="", same_peer=True)],
-                    [Button.inline("📖 Help", data="help"), Button.inline("🔧 Clone Bot", data="clone_info")],
+                    [Button.inline("📖 Help", data="help"), Button.inline("🔧 Clone Bot", data="clone_info")], Button.inline("📊 Stats", data="user_stats")]
                 ]
             )
     except Exception as e:
