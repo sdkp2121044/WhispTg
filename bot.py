@@ -15,11 +15,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Environment variables
-API_ID = int(os.getenv('API_ID', '25136703')
+API_ID = int(os.getenv('API_ID', '25136703'))
 API_HASH = os.getenv('API_HASH', 'accfaf5ecd981c67e481328515c39f89')
 BOT_TOKEN = os.getenv('BOT_TOKEN', '8314503581:AAEm5TvIs_-qn23VfOCnfVL1dTRwwDtpi8A')
-ADMIN_ID = int(os.getenv('ADMIN_ID', '8385462088')  # Owner ID
-PORT = int(os.environ.get('PORT', 10000)
+ADMIN_ID = int(os.getenv('ADMIN_ID', '8385462088'))  # Owner ID
+PORT = int(os.environ.get('PORT', 10000))
 
 # Whisper Channel for forwarding
 WHISPER_CHANNEL = "shriupdates"  # Channel where whispers will be forwarded
