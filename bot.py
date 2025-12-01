@@ -626,7 +626,7 @@ async def stop_broadcast(event):
             f"🛑 Broadcast Stopped\n\n"
             f"👤 User ID: {event.sender_id}\n"
             f"📛 User: {event.sender.first_name}\n"
-            f"🕒 Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}"
+            f"🕒 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
     except Exception as e:
         logger.error(f"Error logging broadcast stop: {e}")
