@@ -54,6 +54,8 @@ user_history = {}
 user_cooldown = {}
 # Cache for user entities to avoid repeated API calls
 user_entity_cache = {}
+# Inline query cache for quick suggestions
+inline_cache = {}
 
 # Data files
 DATA_DIR = "data"
@@ -95,8 +97,11 @@ WELCOME_TEXT = """
 🚀 Only intended recipient can read
 🎯 Easy to use inline mode
 
-✨ **NEW**: Auto-suggest last recipient!
-Send whisper to same person again without typing ID!
+✨ **NEW FEATURES:**
+• Real-time username detection
+• History suggestions while typing
+• Auto-suggest last recipient
+• Space के बाद भी suggestions
 
 Create whispers that only specific users can unlock!
 """
@@ -104,31 +109,36 @@ Create whispers that only specific users can unlock!
 HELP_TEXT = """
 📖 **How to Use Whisper Bot**
 
-**1. Inline Mode (Basic):**
+**1. Basic Usage:**
    • Type `@{}` in any chat
    • Write your message  
-   • Add @username OR user ID at end
+   • Add @username OR user ID
    • Send!
 
-**2. Inline Mode (Auto-Suggest):**
-   • Type `@{}` in any chat
-   • Just type your message
-   • Last recipient will be auto-selected!
-   • Send!
+**2. Smart Detection:**
+   • Type `@{} how are you 123456789`
+   • Bot auto-detects `123456789` as user ID
+   • No need to type @ before number!
 
-**3. Examples:**
-   • `@{} Hello! @username` (First time)
-   • `@{} How are you?` (Auto to last person)
-   • `@{} I miss you 123456789`
+**3. History Suggestions:**
+   • Start typing `@{} ` (with space)
+   • See your recent recipients
+   • Click to select quickly
 
-**4. Commands:**
+**4. Auto-Suggest:**
+   • Type just your message
+   • Last recipient auto-selected
+   • Send without typing username!
+
+**5. Commands:**
    • /start - Start bot
    • /help - Show help
-   • /clear - Clear your last recipient
+   • /history - View your history
+   • /clear - Clear your history
    • /stats - Admin statistics
 
 🔒 **Only the mentioned user can read your message!**
-✨ **Auto-suggest remembers your last recipient!**
+✨ **Smart detection + History suggestions!**
 """
 
 async def get_user_entity(user_identifier):
@@ -197,7 +207,7 @@ async def get_user_entity(user_identifier):
             username = user_identifier.lower().replace('@', '')
             
             # Validate username format
-            if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]{4,30}$', username):
+            if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]{3,30}$', username):
                 raise UsernameInvalidError("Invalid username format")
             
             # Try to get from Telegram API
@@ -231,32 +241,75 @@ def update_user_history(user_id, target_user_id, target_username=None, target_na
             user_history[user_id_str] = []
         
         # Check if target already in history
-        for item in user_history[user_id_str]:
+        existing_index = -1
+        for i, item in enumerate(user_history[user_id_str]):
             if item.get('id') == target_user_id:
-                # Update timestamp
-                item['timestamp'] = datetime.now().isoformat()
-                item['username'] = target_username or item.get('username')
-                item['name'] = target_name or item.get('name', 'User')
-                save_data()
-                return
+                existing_index = i
+                break
         
-        # Add new entry
-        history_entry = {
-            'id': target_user_id,
-            'username': target_username,
-            'name': target_name or f'User {target_user_id}',
-            'timestamp': datetime.now().isoformat()
-        }
+        if existing_index >= 0:
+            # Remove from current position
+            existing_item = user_history[user_id_str].pop(existing_index)
+            # Update and add to beginning
+            existing_item['timestamp'] = datetime.now().isoformat()
+            existing_item['username'] = target_username or existing_item.get('username')
+            existing_item['name'] = target_name or existing_item.get('name', 'User')
+            user_history[user_id_str].insert(0, existing_item)
+        else:
+            # Add new entry at beginning
+            history_entry = {
+                'id': target_user_id,
+                'username': target_username,
+                'name': target_name or f'User {target_user_id}',
+                'timestamp': datetime.now().isoformat()
+            }
+            user_history[user_id_str].insert(0, history_entry)
         
-        user_history[user_id_str].insert(0, history_entry)
-        
-        # Keep only last 5 recipients
-        if len(user_history[user_id_str]) > 5:
-            user_history[user_id_str] = user_history[user_id_str][:5]
+        # Keep only last 10 recipients
+        if len(user_history[user_id_str]) > 10:
+            user_history[user_id_str] = user_history[user_id_str][:10]
         
         save_data()
     except Exception as e:
         logger.error(f"Error updating user history: {e}")
+
+def get_user_history_buttons(user_id, current_query=""):
+    """Get user's history as inline buttons"""
+    try:
+        user_id_str = str(user_id)
+        if user_id_str not in user_history or not user_history[user_id_str]:
+            return []
+        
+        buttons = []
+        for item in user_history[user_id_str][:8]:  # Max 8 suggestions
+            username = item.get('username')
+            name = item.get('name', 'User')
+            user_id_val = item.get('id')
+            
+            # Create display text
+            if username:
+                display_text = f"@{username}"
+                query_text = f"{current_query} @{username}"
+            else:
+                display_text = f"{name} ({user_id_val})"
+                query_text = f"{current_query} {user_id_val}"
+            
+            # Truncate if too long
+            if len(display_text) > 20:
+                display_text = display_text[:17] + "..."
+            
+            buttons.append([
+                Button.switch_inline(
+                    f"🔤 {display_text}",
+                    query=query_text.strip(),
+                    same_peer=True
+                )
+            ])
+        
+        return buttons
+    except Exception as e:
+        logger.error(f"Error getting history buttons: {e}")
+        return []
 
 def get_last_recipient(user_id):
     """Get user's last recipient"""
@@ -274,11 +327,76 @@ def is_cooldown(user_id):
     user_id_str = str(user_id)
     
     if user_id_str in user_cooldown:
-        if now - user_cooldown[user_id_str] < 2:  # 2 seconds cooldown
+        if now - user_cooldown[user_id_str] < 1:  # 1 second cooldown
             return True
     
     user_cooldown[user_id_str] = now
     return False
+
+def extract_target_from_text(text):
+    """
+    Smart extraction of target user from text
+    Returns: (target_user, message_text, target_type)
+    """
+    text = text.strip()
+    
+    # Pattern 1: Username at end with @
+    # Example: "how are you @username"
+    username_pattern = r'(.*?)\s*@([a-zA-Z][a-zA-Z0-9_]{3,30})\s*$'
+    match = re.match(username_pattern, text, re.IGNORECASE)
+    if match:
+        message_text = match.group(1).strip()
+        target_user = match.group(2)
+        return target_user, message_text, 'username'
+    
+    # Pattern 2: User ID at end (8+ digits)
+    # Example: "how are you 123456789"
+    userid_pattern = r'(.*?)\s*(\d{8,})\s*$'
+    match = re.match(userid_pattern, text, re.IGNORECASE)
+    if match:
+        message_text = match.group(1).strip()
+        target_user = match.group(2)
+        return target_user, message_text, 'userid'
+    
+    # Pattern 3: Username anywhere in text with @
+    # Example: "hello @username how are you"
+    username_anywhere = r'.*?@([a-zA-Z][a-zA-Z0-9_]{3,30}).*'
+    match = re.match(username_anywhere, text, re.IGNORECASE)
+    if match:
+        target_user = match.group(1)
+        # Remove the @username from message
+        message_text = re.sub(r'@' + re.escape(target_user), '', text, flags=re.IGNORECASE).strip()
+        return target_user, message_text, 'username'
+    
+    # Pattern 4: User ID anywhere in text (8+ digits)
+    # Example: "hello 123456789 how are you"
+    userid_anywhere = r'.*?(\d{8,}).*'
+    match = re.match(userid_anywhere, text, re.IGNORECASE)
+    if match:
+        target_user = match.group(1)
+        # Remove the user ID from message
+        message_text = re.sub(r'\b' + re.escape(target_user) + r'\b', '', text).strip()
+        return target_user, message_text, 'userid'
+    
+    # Pattern 5: "to @username:" format
+    # Example: "to @username: hello how are you"
+    to_username_pattern = r'to\s+@([a-zA-Z][a-zA-Z0-9_]{3,30})\s*:\s*(.*)'
+    match = re.match(to_username_pattern, text, re.IGNORECASE)
+    if match:
+        target_user = match.group(1)
+        message_text = match.group(2).strip()
+        return target_user, message_text, 'username'
+    
+    # Pattern 6: "to userid:" format
+    # Example: "to 123456789: hello how are you"
+    to_userid_pattern = r'to\s+(\d{8,})\s*:\s*(.*)'
+    match = re.match(to_userid_pattern, text, re.IGNORECASE)
+    if match:
+        target_user = match.group(1)
+        message_text = match.group(2).strip()
+        return target_user, message_text, 'userid'
+    
+    return None, text, None
 
 @bot.on(events.NewMessage(pattern='/start'))
 async def start_handler(event):
@@ -301,7 +419,8 @@ async def start_handler(event):
             [Button.url("📢 Channel", f"https://t.me/{SUPPORT_CHANNEL}")],
             [Button.url("👥 Group", f"https://t.me/{SUPPORT_GROUP}")],
             [Button.switch_inline("🚀 Try Now", query="")],
-            [Button.inline("📖 Help", data="help"), Button.inline("🗑️ Clear History", data="clear_history")]
+            [Button.inline("📖 Help", data="help"), Button.inline("📜 History", data="view_history")],
+            [Button.inline("🗑️ Clear", data="clear_history")]
         ]
         
         if event.sender_id == ADMIN_ID:
@@ -330,17 +449,55 @@ async def help_handler(event):
         logger.error(f"Help error: {e}")
         await event.reply("❌ An error occurred. Please try again.")
 
+@bot.on(events.NewMessage(pattern='/history'))
+async def history_handler(event):
+    """Show user's whisper history"""
+    try:
+        user_id_str = str(event.sender_id)
+        
+        if user_id_str not in user_history or not user_history[user_id_str]:
+            await event.reply("📭 You haven't sent any whispers yet!")
+            return
+        
+        history_text = "📜 **Your Recent Recipients:**\n\n"
+        
+        for i, item in enumerate(user_history[user_id_str][:10], 1):
+            name = item.get('name', 'User')
+            username = item.get('username')
+            user_id_val = item.get('id')
+            
+            if username:
+                history_text += f"{i}. **{name}** (@{username}) `{user_id_val}`\n"
+            else:
+                history_text += f"{i}. **{name}** `{user_id_val}`\n"
+        
+        history_text += f"\nTotal: {len(user_history[user_id_str])} recipients"
+        
+        await event.reply(
+            history_text,
+            buttons=[
+                [Button.switch_inline("💌 Whisper to Recent", query="")],
+                [Button.inline("🗑️ Clear History", data="clear_history")],
+                [Button.inline("🔙 Back", data="back_start")]
+            ]
+        )
+        
+    except Exception as e:
+        logger.error(f"History error: {e}")
+        await event.reply("❌ Error loading history.")
+
 @bot.on(events.NewMessage(pattern='/clear'))
 async def clear_handler(event):
     """Clear user's recipient history"""
     try:
         user_id_str = str(event.sender_id)
-        if user_id_str in user_history:
+        if user_id_str in user_history and user_history[user_id_str]:
+            count = len(user_history[user_id_str])
             del user_history[user_id_str]
             save_data()
-            await event.reply("✅ Your recipient history has been cleared!")
+            await event.reply(f"✅ Cleared {count} recipients from your history!")
         else:
-            await event.reply("ℹ️ You have no history to clear.")
+            await event.reply("📭 You have no history to clear.")
     except Exception as e:
         logger.error(f"Clear error: {e}")
         await event.reply("❌ Error clearing history.")
@@ -358,8 +515,10 @@ async def stats_handler(event):
         # Count active users (last 7 days)
         week_ago = datetime.now() - timedelta(days=7)
         active_users = 0
+        total_history_entries = 0
         
-        for user_data in user_history.values():
+        for user_id, user_data in user_history.items():
+            total_history_entries += len(user_data)
             if user_data:
                 last_time = datetime.fromisoformat(user_data[0]['timestamp'])
                 if last_time > week_ago:
@@ -371,9 +530,10 @@ async def stats_handler(event):
 👥 Total Users: {total_users}
 📈 Active Users (7 days): {active_users}
 💬 Total Messages: {total_messages}
+📋 Total History Entries: {total_history_entries}
+🧠 Cached Users: {len(user_entity_cache)}
 🆔 Admin ID: {ADMIN_ID}
 🌐 Port: {PORT}
-🧠 Cached Users: {len(user_entity_cache)}
 
 **Bot Status:** ✅ Running
 **Last Updated:** {datetime.now().strftime("%Y-%m-%d %H:%M")}
@@ -386,227 +546,261 @@ async def stats_handler(event):
 
 @bot.on(events.InlineQuery)
 async def inline_handler(event):
-    """Handle inline queries with auto-suggest feature"""
+    """Handle inline queries with smart detection and suggestions"""
     try:
         if is_cooldown(event.sender_id):
             await event.answer([])
             return
 
-        # Check if user has history
-        last_recipient = get_last_recipient(event.sender_id)
-        
-        # If no text provided, show help
-        if not event.text or not event.text.strip():
-            if last_recipient:
-                # Auto-suggest last recipient
-                target_name = last_recipient.get('name', 'User')
-                result = event.builder.article(
-                    title=f"🤫 Send to {target_name} (Auto-suggest)",
-                    description=f"Just type your message for {target_name}",
-                    text=f"**Auto-suggest Active!**\n\nType your message below to send to **{target_name}** automatically!\n\nOr mention @username / user ID for someone else.",
-                    buttons=[
-                        [Button.switch_inline(f"💌 Message {target_name}", query="")],
-                        [Button.inline("❌ Clear Auto-suggest", data="clear_auto")]
-                    ]
-                )
-            else:
-                result = event.builder.article(
-                    title="🤫 Whisper Bot - Send Secret Messages",
-                    description="Usage: message @username OR just message",
-                    text="**Send Secret Messages!**\n\n**Format:** `your_message @username`\n\n**Auto-suggest:** After first use, just type message!\n\n🔒 Only they can read!",
-                    buttons=[[Button.switch_inline("🚀 Try Now", query="")]]
-                )
-            await event.answer([result])
-            return
-        
-        text = event.text.strip()
+        query_text = event.text.strip() if event.text else ""
         sender_id = event.sender_id
         
-        # Try to extract target user from message
-        patterns = [
-            (r'@(\w+)$', 'username'),      # @username at end
-            (r'(\d{8,})$', 'userid'),      # user ID at end (8+ digits)
-            (r'to @(\w+):?\s*(.*)', 'username_full'),  # "to @username: message"
-            (r'to (\d{8,}):?\s*(.*)', 'userid_full')    # "to userid: message"
-        ]
-        
-        target_user = None
-        message_text = text
-        explicit_target = False
-        target_type = None
-        
-        for pattern, t_type in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                if t_type in ['username', 'userid']:
-                    # Simple format: message @username
-                    target_user = match.group(1)
-                    # Remove target from message text
-                    if t_type == 'username':
-                        message_text = text.replace(f"@{target_user}", "").strip()
-                    else:
-                        message_text = text.replace(target_user, "").strip()
-                    explicit_target = True
-                    target_type = t_type
-                else:
-                    # "to @username: message" format
-                    target_user = match.group(1)
-                    message_text = match.group(2).strip() if match.group(2) else ""
-                    explicit_target = True
-                    target_type = t_type.replace('_full', '')
-                break
-        
-        # If no explicit target, try auto-suggest
-        if not explicit_target and last_recipient:
-            target_user = last_recipient['id']
-            message_text = text  # Use entire text as message
-            auto_suggested = True
-            target_type = 'userid'  # Auto-suggest uses ID
-        elif not explicit_target:
-            # No target found and no history
+        # Case 1: Empty query - Show help with history
+        if not query_text:
+            last_recipient = get_last_recipient(sender_id)
+            history_buttons = get_user_history_buttons(sender_id, "")
+            
+            if last_recipient:
+                target_name = last_recipient.get('name', 'User')
+                result_text = f"""
+**🤫 Whisper Bot - Smart Detection**
+
+📝 **Last Recipient:** {target_name}
+✨ **Type your message and bot will auto-detect recipient!**
+
+**Examples:**
+1. `how are you 123456789` (Auto-detects user ID)
+2. `hello @username` (Auto-detects @username)
+3. `Just type message` (Auto-sends to last recipient)
+
+💡 **Start typing to see history suggestions!**
+                """
+            else:
+                result_text = """
+**🤫 Whisper Bot - Smart Detection**
+
+✨ **Smart features:**
+• Auto-detect username/userID from message
+• History suggestions while typing
+• Auto-suggest last recipient
+
+**How to use:**
+1. Type your message
+2. Add @username OR user ID anywhere
+3. Or just type message for auto-suggest
+4. Bot will detect automatically!
+
+**Examples:**
+• `how are you @username`
+• `hello 123456789`
+• `Just your message` (auto to last)
+                """
+            
+            # Create main result
             result = event.builder.article(
-                title="❌ No recipient specified",
-                description="Mention @username or user ID",
-                text="**Please specify a recipient!**\n\n**Format:** `message @username`\n**Or:** `message 123456789`\n\nFirst time needs explicit mention, then auto-suggest works!",
-                buttons=[[Button.switch_inline("🔄 Try Again", query=text)]]
-            )
-            await event.answer([result])
-            return
-        else:
-            auto_suggested = False
-        
-        # Validate message
-        if not message_text:
-            result = event.builder.article(
-                title="❌ Empty Message",
-                description="Please enter a message",
-                text="❌ Message cannot be empty. Please type your secret message."
+                title="🤫 Whisper Bot - Smart Detection",
+                description="Type message with @username or user ID",
+                text=result_text,
+                buttons=history_buttons or [[Button.switch_inline("🚀 Try Now", query="")]]
             )
             await event.answer([result])
             return
         
-        if len(message_text) > 1000:
-            result = event.builder.article(
-                title="❌ Message Too Long",
-                description="Maximum 1000 characters",
-                text="❌ Message is too long! Please keep it under 1000 characters."
-            )
-            await event.answer([result])
-            return
+        # Case 2: Query has content - Try to detect target
+        # First get history suggestions for current query
+        history_buttons = get_user_history_buttons(sender_id, query_text)
         
-        # Get user entity with better error handling
-        try:
-            if target_type == 'userid':
-                # For user ID, ensure it's numeric
-                if not str(target_user).isdigit():
-                    raise ValueError("User ID must be numeric")
+        # Try to extract target from text
+        target_user, message_text, target_type = extract_target_from_text(query_text)
+        
+        # Case 2A: Target detected in query
+        if target_user and target_type:
+            try:
+                if target_type == 'userid':
+                    # Validate user ID
+                    if not target_user.isdigit() or len(target_user) < 8:
+                        raise ValueError("Invalid user ID")
+                    
+                    user_obj = await get_user_entity(int(target_user))
+                    target_user_id = int(target_user)
+                    target_username = getattr(user_obj, 'username', None)
+                    target_name = getattr(user_obj, 'first_name', f'User {target_user}')
+                    
+                else:  # username
+                    username = target_user.lower().replace('@', '')
+                    
+                    # Validate username
+                    if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]{3,30}$', username):
+                        raise UsernameInvalidError("Invalid username")
+                    
+                    user_obj = await get_user_entity(username)
+                    target_user_id = user_obj.id
+                    target_username = username
+                    target_name = getattr(user_obj, 'first_name', f'@{username}')
                 
-                user_obj = await get_user_entity(int(target_user))
-                target_user_id = int(target_user)
-                target_username = getattr(user_obj, 'username', None)
-                target_name = getattr(user_obj, 'first_name', f'User {target_user}')
-                
-            else:  # username
-                # Remove @ if present
-                username = str(target_user).replace('@', '').lower()
-                
-                # Validate username format
-                if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]{4,30}$', username):
+                # Validate message
+                if not message_text:
+                    # Show error with history suggestions
                     result = event.builder.article(
-                        title="❌ Invalid Username",
-                        description="Username format invalid",
-                        text="**Valid username format:**\n• Starts with letter\n• 5-31 characters\n• Letters, numbers, underscores only\n\n**Example:** `@username` not `@dpak`"
+                        title="❌ Empty Message",
+                        description="Please enter a message",
+                        text="**Message is empty!**\n\nPlease type your secret message after the username/user ID.\n\n💡 Try these formats:\n• `hello @username`\n• `how are you 123456789`",
+                        buttons=history_buttons
                     )
                     await event.answer([result])
                     return
                 
-                user_obj = await get_user_entity(username)
-                target_user_id = user_obj.id
-                target_username = username
-                target_name = getattr(user_obj, 'first_name', f'@{username}')
+                # Update user history
+                update_user_history(
+                    sender_id,
+                    target_user_id,
+                    target_username,
+                    target_name
+                )
+                
+                # Create message entry
+                message_id = f'msg_{sender_id}_{target_user_id}_{int(datetime.now().timestamp())}'
+                messages_db[message_id] = {
+                    'user_id': target_user_id,
+                    'msg': message_text,
+                    'sender_id': sender_id,
+                    'timestamp': datetime.now().isoformat(),
+                    'target_name': target_name,
+                    'target_username': target_username,
+                    'detected_automatically': True
+                }
+                
+                # Create result
+                result_text = f"""
+**🔐 Secret message for {target_name}!**
+
+💬 **Message:** {message_text[:50]}{'...' if len(message_text) > 50 else ''}
+
+✨ **Smart Detection:** Bot automatically detected {target_name} from your message!
+
+🔒 **Only {target_name} can open this message.**
+                """
+                
+                result = event.builder.article(
+                    title=f"🤫 To {target_name} (Auto-detected)",
+                    description=f"Click to send to {target_name}",
+                    text=result_text,
+                    buttons=[
+                        [Button.inline("🔓 Send Secret Message", message_id)],
+                        *history_buttons[:2]  # Show first 2 history buttons
+                    ]
+                )
+                
+                await event.answer([result])
+                return
+                
+            except (UsernameNotOccupiedError, UsernameInvalidError) as e:
+                # Username not found or invalid
+                error_text = f"""
+❌ **User not found!**
+
+**Problem:** @{target_user} doesn't exist or is invalid.
+
+**Solutions:**
+1. Check username spelling
+2. Use user ID instead: `{query_text.split('@')[0]} 123456789`
+3. Make sure user hasn't changed username
+
+💡 **Valid username:** 4-31 chars, starts with letter
+                """
+                result = event.builder.article(
+                    title=f"❌ @{target_user} not found",
+                    description="User doesn't exist",
+                    text=error_text,
+                    buttons=history_buttons
+                )
+                await event.answer([result])
+                return
+                
+            except Exception as e:
+                logger.error(f"Error processing detected target: {e}")
+                # Continue to show suggestions
+        
+        # Case 2B: No target detected - Check for auto-suggest
+        last_recipient = get_last_recipient(sender_id)
+        
+        if last_recipient and message_text:  # message_text from extraction attempt
+            # Auto-suggest mode
+            auto_suggested = True
+            target_user_id = last_recipient['id']
+            target_username = last_recipient.get('username')
+            target_name = last_recipient.get('name', 'User')
             
-        except UsernameNotOccupiedError as e:
-            logger.warning(f"Username not occupied: {target_user}")
+            # Update timestamp
+            update_user_history(sender_id, target_user_id, target_username, target_name)
+            
+            # Create message entry
+            message_id = f'msg_{sender_id}_{target_user_id}_{int(datetime.now().timestamp())}'
+            messages_db[message_id] = {
+                'user_id': target_user_id,
+                'msg': query_text,  # Use full query as message
+                'sender_id': sender_id,
+                'timestamp': datetime.now().isoformat(),
+                'target_name': target_name,
+                'target_username': target_username,
+                'auto_suggested': True
+            }
+            
+            # Create result
+            result_text = f"""
+**✨ Auto-Suggest Active!**
+
+💬 **Message:** {query_text[:50]}{'...' if len(query_text) > 50 else ''}
+
+👤 **To:** {target_name}
+🎯 **Auto-detected from your history!**
+
+🔒 **Only {target_name} can open this message.**
+            """
+            
             result = event.builder.article(
-                title="❌ User Not Found",
-                description=f"@{target_user} not found",
-                text=f"❌ User **@{target_user}** not found on Telegram!\n\nPlease check the username or try using user ID instead."
+                title=f"🤫 To {target_name} (Auto-suggest)",
+                description=f"Auto-send to {target_name}",
+                text=result_text,
+                buttons=[
+                    [Button.inline("🔓 Send Secret Message", message_id)],
+                    *history_buttons[:2]
+                ]
             )
+            
             await event.answer([result])
             return
-            
-        except UsernameInvalidError as e:
-            logger.warning(f"Invalid username: {target_user}")
-            result = event.builder.article(
-                title="❌ Invalid Username",
-                description="Username format is wrong",
-                text="**Valid username format:**\n• Starts with letter (a-z)\n• 5-31 characters long\n• Only letters, numbers, underscores\n• No special characters\n\n**Example:** `@username`"
-            )
-            await event.answer([result])
-            return
-            
-        except ValueError as e:
-            logger.warning(f"Value error for {target_user}: {e}")
-            result = event.builder.article(
-                title="❌ Invalid Input",
-                description="Please check format",
-                text=f"❌ Invalid input: {str(e)}\n\n**Correct formats:**\n• `message @username`\n• `message 123456789`"
-            )
-            await event.answer([result])
-            return
-            
-        except Exception as e:
-            logger.error(f"Error getting user entity for {target_user}: {e}")
-            result = event.builder.article(
-                title="❌ Error Finding User",
-                description="Could not find user",
-                text="❌ Could not find the user. They might have:\n• Changed username\n• Blocked the bot\n• Deleted account\n\nTry using their user ID instead."
-            )
-            await event.answer([result])
-            return
         
-        # Update user history for auto-suggest
-        update_user_history(
-            sender_id,
-            target_user_id,
-            target_username,
-            target_name
-        )
+        # Case 2C: No target and no auto-suggest - Show suggestions
+        # Check if query looks like it might have a target soon
+        words = query_text.split()
+        last_word = words[-1] if words else ""
         
-        # Create message entry
-        message_id = f'msg_{sender_id}_{target_user_id}_{int(datetime.now().timestamp())}'
-        messages_db[message_id] = {
-            'user_id': target_user_id,
-            'msg': message_text,
-            'sender_id': sender_id,
-            'timestamp': datetime.now().isoformat(),
-            'target_name': target_name,
-            'target_username': target_username,
-            'auto_suggested': auto_suggested
-        }
+        suggestion_text = """
+**💡 Need to specify a recipient!**
+
+Bot couldn't detect a username or user ID in your message.
+
+**Try these formats:**
+1. `your message @username`
+2. `your message 123456789`
+3. `to @username: your message`
+4. `to 123456789: your message`
+
+**Or select from your recent recipients below:**
+        """
         
-        # Create result
-        if auto_suggested:
-            description = f"Auto-sent to {target_name}"
-            title = f"🔒 Auto to {target_name}"
-        else:
-            description = f"Click to send to {target_name}"
-            title = f"🔒 For {target_name}"
-        
-        result_text = f"**🔐 A secret message for {target_name}!**"
-        if target_username:
-            result_text += f" (@{target_username})"
-        
-        if auto_suggested:
-            result_text += f"\n\n✨ **Auto-suggest was used!**\nNext time, just type your message!"
-        
-        result_text += f"\n\n*Only {target_name} can open this message.*"
+        # If last word might be start of username
+        if last_word.startswith('@') and len(last_word) > 1:
+            suggestion_text += f"\n\n💡 **Tip:** Finish typing the username: `{last_word}...`"
         
         result = event.builder.article(
-            title=title,
-            description=description,
-            text=result_text,
-            buttons=[[Button.inline("🔓 Show Message", message_id)]]
+            title="❌ Specify a recipient",
+            description="Add @username or user ID",
+            text=suggestion_text,
+            buttons=history_buttons or [
+                [Button.switch_inline("🔄 Try Again", query=query_text)]
+            ]
         )
         
         await event.answer([result])
@@ -637,6 +831,59 @@ async def callback_handler(event):
                 ]
             )
         
+        elif data == "view_history":
+            user_id_str = str(event.sender_id)
+            
+            if user_id_str not in user_history or not user_history[user_id_str]:
+                await event.answer("No history found!", alert=True)
+                await event.edit(
+                    "📭 You haven't sent any whispers yet!",
+                    buttons=[[Button.switch_inline("🚀 Send First Whisper", query="")]]
+                )
+                return
+            
+            history_text = "📜 **Your Recent Recipients:**\n\n"
+            
+            for i, item in enumerate(user_history[user_id_str][:8], 1):
+                name = item.get('name', 'User')
+                username = item.get('username')
+                user_id_val = item.get('id')
+                
+                if username:
+                    history_text += f"{i}. **{name}** (@{username}) `{user_id_val}`\n"
+                else:
+                    history_text += f"{i}. **{name}** `{user_id_val}`\n"
+            
+            history_text += f"\nTotal: {len(user_history[user_id_str])} recipients"
+            
+            # Create buttons for quick selection
+            buttons = []
+            for item in user_history[user_id_str][:4]:
+                username = item.get('username')
+                name = item.get('name', 'User')
+                
+                if username:
+                    display = f"🔤 @{username}"
+                    query = f" @{username}"
+                else:
+                    display = f"🔢 {name}"
+                    query = f" {item['id']}"
+                
+                buttons.append([
+                    Button.switch_inline(
+                        display[:20],
+                        query=query,
+                        same_peer=True
+                    )
+                ])
+            
+            buttons.append([
+                Button.inline("🗑️ Clear All", data="clear_history"),
+                Button.inline("🔙 Back", data="back_start")
+            ])
+            
+            await event.edit(history_text, buttons=buttons)
+        
         elif data == "admin_stats":
             if event.sender_id != ADMIN_ID:
                 await event.answer("❌ Admin only!", alert=True)
@@ -644,13 +891,15 @@ async def callback_handler(event):
                 
             total_users = len(user_history)
             total_messages = len(messages_db)
+            total_history_entries = sum(len(v) for v in user_history.values())
             
             stats_text = f"📊 **Admin Statistics**\n\n"
             stats_text += f"👥 Total Users: {total_users}\n"
             stats_text += f"💬 Total Messages: {total_messages}\n"
+            stats_text += f"📋 History Entries: {total_history_entries}\n"
+            stats_text += f"🧠 Cached Users: {len(user_entity_cache)}\n"
             stats_text += f"🆔 Admin ID: {ADMIN_ID}\n"
             stats_text += f"🌐 Port: {PORT}\n"
-            stats_text += f"🧠 Cached Users: {len(user_entity_cache)}\n"
             stats_text += f"🕒 Last Updated: {datetime.now().strftime('%H:%M:%S')}\n\n"
             stats_text += f"**Status:** ✅ Running"
             
@@ -661,35 +910,17 @@ async def callback_handler(event):
         
         elif data == "clear_history":
             user_id_str = str(event.sender_id)
-            if user_id_str in user_history:
+            if user_id_str in user_history and user_history[user_id_str]:
+                count = len(user_history[user_id_str])
                 del user_history[user_id_str]
                 save_data()
-                await event.answer("✅ History cleared!", alert=True)
+                await event.answer(f"✅ Cleared {count} recipients!", alert=True)
                 await event.edit(
-                    "✅ Your recipient history has been cleared!\n\nNext whisper will need explicit @username or ID.",
-                    buttons=[[Button.inline("🔙 Back", data="back_start")]]
+                    f"✅ Cleared {count} recipients from your history!\n\nNext whisper will need explicit @username or ID.",
+                    buttons=[[Button.switch_inline("🚀 Send Whisper", query="")]]
                 )
             else:
                 await event.answer("No history to clear!", alert=True)
-        
-        elif data == "clear_auto":
-            user_id_str = str(event.sender_id)
-            if user_id_str in user_history:
-                # Just remove the first (most recent) entry
-                if user_history[user_id_str]:
-                    user_history[user_id_str] = user_history[user_id_str][1:]
-                    if not user_history[user_id_str]:
-                        del user_history[user_id_str]
-                    save_data()
-                    await event.answer("✅ Auto-suggest cleared!", alert=True)
-                    await event.edit(
-                        "✅ Auto-suggest cleared!\n\nNext time, mention @username or user ID explicitly.",
-                        buttons=[[Button.switch_inline("🚀 Try Now", query="")]]
-                    )
-                else:
-                    await event.answer("No auto-suggest to clear!", alert=True)
-            else:
-                await event.answer("No history found!", alert=True)
         
         elif data == "back_start":
             # Get updated last recipient info
@@ -708,7 +939,8 @@ async def callback_handler(event):
                 [Button.url("📢 Channel", f"https://t.me/{SUPPORT_CHANNEL}")],
                 [Button.url("👥 Group", f"https://t.me/{SUPPORT_GROUP}")],
                 [Button.switch_inline("🚀 Try Now", query="")],
-                [Button.inline("📖 Help", data="help"), Button.inline("🗑️ Clear History", data="clear_history")]
+                [Button.inline("📖 Help", data="help"), Button.inline("📜 History", data="view_history")],
+                [Button.inline("🗑️ Clear", data="clear_history")]
             ]
             
             if event.sender_id == ADMIN_ID:
@@ -723,18 +955,14 @@ async def callback_handler(event):
                 # Target user viewing the message
                 sender_info = ""
                 try:
-                    # Try to get sender info
                     sender_id = msg_data['sender_id']
-                    # Check cache first
                     cache_key = str(sender_id)
                     if cache_key in user_entity_cache:
                         sender = user_entity_cache[cache_key]['entity']
                     else:
-                        # Try to fetch
                         try:
                             sender = await bot.get_entity(sender_id)
                         except:
-                            # Create minimal sender info
                             sender = type('obj', (object,), {
                                 'first_name': 'Someone',
                                 'username': None
@@ -748,7 +976,9 @@ async def callback_handler(event):
                     sender_info = f"\n\n💌 From: Anonymous"
                 
                 alert_text = f"🔓 {msg_data['msg']}{sender_info}"
-                if msg_data.get('auto_suggested'):
+                if msg_data.get('detected_automatically'):
+                    alert_text += "\n\n✨ This message was auto-detected from your text!"
+                elif msg_data.get('auto_suggested'):
                     alert_text += "\n\n✨ This was sent using auto-suggest!"
                 
                 await event.answer(alert_text, alert=True)
@@ -759,7 +989,9 @@ async def callback_handler(event):
                 if msg_data.get('target_username'):
                     alert_text += f" (@{msg_data['target_username']})"
                 
-                if msg_data.get('auto_suggested'):
+                if msg_data.get('detected_automatically'):
+                    alert_text += "\n\n✅ Smart detection was used!"
+                elif msg_data.get('auto_suggested'):
                     alert_text += "\n\n✅ Auto-suggest was used!"
                 
                 await event.answer(alert_text, alert=True)
@@ -796,25 +1028,25 @@ def home():
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
             body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; justify-content: center; align-items: center; padding: 20px; }
-            .container { background: white; border-radius: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden; width: 100%; max-width: 800px; }
+            .container { background: white; border-radius: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden; width: 100%; max-width: 900px; }
             .header { background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; padding: 30px; text-align: center; }
             .header h1 { font-size: 2.5rem; margin-bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 15px; }
             .header p { font-size: 1.1rem; opacity: 0.9; }
             .content { padding: 40px; }
-            .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
-            .stat-card { background: #f8fafc; border-radius: 15px; padding: 25px; text-align: center; border: 2px solid #e2e8f0; transition: transform 0.3s, border-color 0.3s; }
+            .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 30px; }
+            .stat-card { background: #f8fafc; border-radius: 15px; padding: 20px; text-align: center; border: 2px solid #e2e8f0; transition: transform 0.3s, border-color 0.3s; }
             .stat-card:hover { transform: translateY(-5px); border-color: #4f46e5; }
-            .stat-value { font-size: 2.5rem; font-weight: bold; color: #4f46e5; margin-bottom: 10px; }
-            .stat-label { font-size: 1rem; color: #64748b; font-weight: 500; }
+            .stat-value { font-size: 2.2rem; font-weight: bold; color: #4f46e5; margin-bottom: 8px; }
+            .stat-label { font-size: 0.9rem; color: #64748b; font-weight: 500; }
             .feature-card { background: #f1f5f9; border-radius: 15px; padding: 25px; margin-bottom: 20px; border-left: 5px solid #4f46e5; }
             .feature-card h3 { color: #334155; margin-bottom: 15px; display: flex; align-items: center; gap: 10px; }
             .feature-card ul { list-style: none; padding-left: 0; }
             .feature-card li { padding: 8px 0; color: #475569; display: flex; align-items: center; gap: 10px; }
+            .example-box { background: #e0e7ff; border-radius: 10px; padding: 15px; margin: 15px 0; border-left: 4px solid #4f46e5; }
+            .example-box code { background: white; padding: 5px 10px; border-radius: 5px; font-family: monospace; display: block; margin: 5px 0; }
             .bot-link { display: inline-block; background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; text-decoration: none; padding: 15px 30px; border-radius: 50px; font-weight: bold; font-size: 1.1rem; margin-top: 20px; transition: transform 0.3s, box-shadow 0.3s; }
             .bot-link:hover { transform: translateY(-3px); box-shadow: 0 10px 25px rgba(79, 70, 229, 0.4); }
             .status-badge { display: inline-block; padding: 8px 20px; background: #10b981; color: white; border-radius: 50px; font-weight: bold; margin-bottom: 20px; }
-            .error-box { background: #fee2e2; border: 2px solid #dc2626; border-radius: 10px; padding: 20px; margin: 20px 0; }
-            .error-box h4 { color: #dc2626; margin-bottom: 10px; }
             @media (max-width: 768px) { .header h1 { font-size: 2rem; } .content { padding: 20px; } .stats-grid { grid-template-columns: 1fr; } }
         </style>
     </head>
@@ -822,7 +1054,7 @@ def home():
         <div class="container">
             <div class="header">
                 <h1>🤫 ShriBots Whisper Bot</h1>
-                <p>Send anonymous secret messages on Telegram</p>
+                <p>Smart detection + History suggestions</p>
             </div>
             
             <div class="content">
@@ -840,47 +1072,50 @@ def home():
                     </div>
                     
                     <div class="stat-card">
-                        <div class="stat-value">{{ cached_users }}</div>
-                        <div class="stat-label">🧠 Cached Users</div>
+                        <div class="stat-value">{{ total_history }}</div>
+                        <div class="stat-label">📜 History Entries</div>
                     </div>
                     
                     <div class="stat-card">
-                        <div class="stat-value">{{ time }}</div>
-                        <div class="stat-label">🕒 Server Time</div>
+                        <div class="stat-value">{{ cached_users }}</div>
+                        <div class="stat-label">🧠 Cached Users</div>
                     </div>
                 </div>
                 
                 <div class="feature-card">
-                    <h3>✨ Auto-Suggest Feature</h3>
+                    <h3>🎯 Smart Detection Features</h3>
                     <ul>
-                        <li>🎯 Send to last recipient automatically</li>
-                        <li>🔢 No need to type username/ID again</li>
-                        <li>📝 Just type your message and send</li>
-                        <li>🔄 First time needs @username, then auto!</li>
+                        <li>🔍 Auto-detect username/userID anywhere in message</li>
+                        <li>📝 No specific format needed - bot understands naturally</li>
+                        <li>💾 History suggestions while typing (space देने के बाद भी)</li>
+                        <li>🔄 Auto-suggest last recipient</li>
                     </ul>
+                    
+                    <div class="example-box">
+                        <strong>📋 Examples (All work!):</strong>
+                        <code>how are you @username</code>
+                        <code>hello 123456789</code>
+                        <code>to @username: how are you</code>
+                        <code>to 123456789: hello there</code>
+                        <code>Just type message (auto to last)</code>
+                    </div>
                 </div>
                 
                 <div class="feature-card">
                     <h3>🚀 How to Use</h3>
                     <ul>
-                        <li>1. Type @{{ bot_username }} in any chat</li>
-                        <li>2. Write your message</li>
-                        <li>3. Add @username (first time only)</li>
-                        <li>4. Next time: Just type message!</li>
-                        <li>5. Only they can read it 🔒</li>
+                        <li>1. Type @{{ bot_username }} in any Telegram chat</li>
+                        <li>2. Write your message naturally</li>
+                        <li>3. Include @username or user ID anywhere</li>
+                        <li>4. Or just type message for auto-suggest</li>
+                        <li>5. See history suggestions while typing!</li>
+                        <li>6. Only they can read it 🔒</li>
                     </ul>
-                </div>
-                
-                <div class="error-box">
-                    <h4>⚠️ Common Issues & Solutions</h4>
-                    <p><strong>Problem:</strong> "User not found" error</p>
-                    <p><strong>Solution:</strong> Ensure username is correct (5-31 chars, starts with letter)</p>
-                    <p><strong>Example:</strong> Use @username (not @dpak which is too short)</p>
                 </div>
                 
                 <center>
                     <a href="https://t.me/{{ bot_username }}" class="bot-link" target="_blank">
-                        🚀 Start Using Bot
+                        🚀 Start Using Smart Whisper Bot
                     </a>
                 </center>
             </div>
@@ -889,26 +1124,31 @@ def home():
     </html>
     """
     
+    total_history_entries = sum(len(v) for v in user_history.values())
+    
     return render_template_string(
         html_template,
         total_users=len(user_history),
         total_messages=len(messages_db),
+        total_history=total_history_entries,
         cached_users=len(user_entity_cache),
-        time=datetime.now().strftime("%H:%M:%S"),
         bot_username=bot_username
     )
 
 @app.route('/health')
 def health():
+    total_history_entries = sum(len(v) for v in user_history.values())
+    
     return json.dumps({
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "total_users": len(user_history),
         "total_messages": len(messages_db),
+        "total_history_entries": total_history_entries,
         "cached_users": len(user_entity_cache),
         "bot_connected": bot.is_connected(),
-        "version": "2.1",
-        "feature": "whisper_with_auto_suggest_and_cache"
+        "version": "3.0",
+        "features": ["smart_detection", "history_suggestions", "auto_suggest", "real_time_suggestions"]
     })
 
 def run_flask():
@@ -925,26 +1165,39 @@ async def main():
     """Main function to start the bot"""
     try:
         me = await bot.get_me()
-        logger.info(f"🎭 ShriBots Whisper Bot v2.1 Started!")
+        total_history_entries = sum(len(v) for v in user_history.values())
+        
+        logger.info(f"🎭 ShriBots Whisper Bot v3.0 Started!")
         logger.info(f"🤖 Bot: @{me.username}")
         logger.info(f"🆔 Bot ID: {me.id}")
         logger.info(f"👑 Admin: {ADMIN_ID}")
         logger.info(f"👥 Total Users: {len(user_history)}")
         logger.info(f"💬 Total Messages: {len(messages_db)}")
+        logger.info(f"📜 Total History Entries: {total_history_entries}")
         logger.info(f"🌐 Web server running on port {PORT}")
-        logger.info("✨ Auto-suggest feature: ACTIVE")
-        logger.info("🧠 User caching: ENABLED")
+        logger.info("🎯 Smart Detection: ACTIVE")
+        logger.info("💡 History Suggestions: ENABLED")
+        logger.info("🔄 Auto-Suggest: ENABLED")
         logger.info("✅ Bot is ready and working!")
         logger.info("🔗 Use /start to begin")
+        
+        print("\n" + "="*60)
+        print("✨ NEW SMART FEATURES:")
+        print("   • Real-time username/userID detection")
+        print("   • History suggestions while typing")
+        print("   • Space देने के बाद भी suggestions show")
+        print("   • Multiple format support")
+        print("="*60)
+        
     except Exception as e:
         logger.error(f"❌ Error in main: {e}")
         raise
 
 if __name__ == '__main__':
-    print("=" * 50)
-    print("🚀 Starting ShriBots Whisper Bot v2.1")
-    print("✨ With Auto-Suggest & User Cache")
-    print("=" * 50)
+    print("=" * 60)
+    print("🚀 Starting ShriBots Whisper Bot v3.0")
+    print("✨ With Smart Detection & Real-time Suggestions")
+    print("=" * 60)
     
     # Check environment variables
     required_vars = ['API_ID', 'API_HASH', 'BOT_TOKEN']
@@ -963,17 +1216,15 @@ if __name__ == '__main__':
         bot.start()
         bot.loop.run_until_complete(main())
         
-        print("=" * 50)
+        print("=" * 60)
         print("✅ Bot started successfully!")
-        print("✨ New Features:")
-        print("   • User entity caching (5 minutes)")
-        print("   • Better username validation (5-31 chars)")
-        print("   • Improved error messages")
-        print("   • Auto-suggest with history")
-        print("=" * 50)
+        print("💡 Try these examples in any chat:")
+        print("   1. @bot_username how are you 123456789")
+        print("   2. @bot_username hello @username")
+        print("   3. @bot_username (space देकर history देखें)")
+        print("=" * 60)
         print("🔄 Bot is now running...")
         print(f"🌐 Web Dashboard: http://localhost:{PORT}")
-        print("💡 Tip: Username must be 5-31 characters, starts with letter")
         
         # Keep the bot running
         bot.run_until_disconnected()
