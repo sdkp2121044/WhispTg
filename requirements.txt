@@ -1,6 +1,4 @@
-telethon==1.28.5
-flask==2.3.3
-pysocks==1.7.1
 Flask==2.3.3
 telethon==1.34.0
 python-dotenv==1.0.0
+pysocks==1.7.1
