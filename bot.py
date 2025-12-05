@@ -1,114 +1,182 @@
-# bot.py
-import os
-import logging
+# main.py
 import asyncio
+import logging
+import sys
+import signal
+from datetime import datetime
+
 from telethon import TelegramClient
 
-# Import from other files
-from config import API_ID, API_HASH, BOT_TOKEN, PORT
-from database import load_data, save_data
+from config import API_ID, API_HASH, BOT_TOKEN, logger, BOT_NAME
+from database import init_database, message_manager
 from handlers import setup_handlers
 from web_server import start_web_server
+from utils import cooldown_manager
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-# Initialize bot
-try:
-    bot = TelegramClient('whisper_bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-    logger.info("✅ Bot client initialized successfully")
-except Exception as e:
-    logger.error(f"❌ Failed to initialize bot: {e}")
-    raise
-
-async def main():
-    """Main function to start the bot"""
-    try:
-        # Load data
-        load_data()
+# ======================
+# BOT INITIALIZATION
+# ======================
+class WhisperBot:
+    def __init__(self):
+        self.bot = None
+        self.is_running = False
+        self.start_time = None
         
-        # Setup handlers
-        setup_handlers(bot)
-        
-        # Get bot info
-        me = await bot.get_me()
-        
-        from database import user_whisper_history, messages_db, user_entity_cache
-        total_history_entries = sum(len(v) for v in user_whisper_history.values())
-        
-        logger.info(f"🎭 ShriBots Whisper Bot v4.0 Started!")
-        logger.info(f"🤖 Bot: @{me.username}")
-        logger.info(f"🆔 Bot ID: {me.id}")
-        logger.info(f"👥 Total Users: {len(user_whisper_history)}")
-        logger.info(f"💬 Total Messages: {len(messages_db)}")
-        logger.info(f"📚 Total History Entries: {total_history_entries}")
-        logger.info(f"🌐 Web server running on port {PORT}")
-        logger.info("📚 Complete History Tracking: ACTIVE")
-        logger.info("✨ ALL past recipients remembered!")
-        logger.info("✅ Bot is ready and working!")
-        logger.info("🔗 Use /start to begin")
-        
+    async def initialize(self):
+        """Initialize the bot"""
+        try:
+            logger.info("🚀 Initializing Whisper Bot...")
+            
+            # Initialize database
+            init_database()
+            logger.info("✅ Database initialized")
+            
+            # Initialize bot client
+            self.bot = TelegramClient('whisper_bot', API_ID, API_HASH)
+            await self.bot.start(bot_token=BOT_TOKEN)
+            logger.info("✅ Bot client started")
+            
+            # Setup handlers
+            setup_handlers(self.bot)
+            logger.info("✅ Handlers configured")
+            
+            # Start web server
+            web_server_thread = start_web_server()
+            if web_server_thread:
+                logger.info("✅ Web server started")
+            
+            self.start_time = datetime.now()
+            self.is_running = True
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Initialization failed: {e}")
+            return False
+    
+    async def get_bot_info(self):
+        """Get bot information"""
+        try:
+            me = await self.bot.get_me()
+            return {
+                'username': me.username,
+                'id': me.id,
+                'name': me.first_name,
+                'is_bot': me.bot
+            }
+        except Exception as e:
+            logger.error(f"Error getting bot info: {e}")
+            return None
+    
+    async def print_startup_info(self):
+        """Print startup information"""
         print("\n" + "="*60)
-        print("📚 COMPLETE HISTORY TRACKING FEATURES:")
-        print("   • Remembers ALL past whispers")
-        print("   • Stores EVERY username/userID ever used")
-        print("   • Shows ALL recipients when typing @bot_username")
-        print("   • Personal statistics for each user")
+        print(f"🤫 {BOT_NAME}")
         print("="*60)
         
-    except Exception as e:
-        logger.error(f"❌ Error in main: {e}")
-        raise
+        bot_info = await self.get_bot_info()
+        if bot_info:
+            print(f"🔹 Bot: @{bot_info['username']}")
+            print(f"🔹 ID: {bot_info['id']}")
+        
+        print(f"🔹 Start Time: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"🔹 API ID: {API_ID}")
+        print("="*60)
+        print("✨ Features Active:")
+        print("   • Instant User Detection (ANY format)")
+        print("   • Complete History Tracking")
+        print("   • All Past Recipients Show")
+        print("   • Smart Auto-Suggest")
+        print("   • Multi-Format Support")
+        print("="*60)
+        print("📱 Usage: Type @bot_username in any Telegram chat")
+        print("="*60)
+        print("\n🔄 Bot is running... (Press Ctrl+C to stop)\n")
+    
+    async def cleanup(self):
+        """Cleanup before shutdown"""
+        try:
+            logger.info("🧹 Starting cleanup...")
+            
+            # Cleanup expired messages
+            message_manager.cleanup_expired()
+            
+            # Clear cooldown cache
+            cooldown_manager.clear_old()
+            
+            # Disconnect bot
+            if self.bot and self.bot.is_connected():
+                await self.bot.disconnect()
+                logger.info("✅ Bot disconnected")
+            
+            self.is_running = False
+            logger.info("✅ Cleanup completed")
+            
+        except Exception as e:
+            logger.error(f"❌ Cleanup error: {e}")
+    
+    async def run(self):
+        """Main bot running loop"""
+        try:
+            # Initialize
+            success = await self.initialize()
+            if not success:
+                logger.error("❌ Failed to initialize bot")
+                return
+            
+            # Print startup info
+            await self.print_startup_info()
+            
+            # Set up signal handlers
+            loop = asyncio.get_event_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(
+                    sig,
+                    lambda: asyncio.create_task(self.shutdown())
+                )
+            
+            # Keep bot running
+            await self.bot.run_until_disconnected()
+            
+        except KeyboardInterrupt:
+            logger.info("🛑 Bot stopped by user")
+        except Exception as e:
+            logger.error(f"❌ Bot runtime error: {e}")
+        finally:
+            await self.cleanup()
+    
+    async def shutdown(self):
+        """Graceful shutdown"""
+        logger.info("🔻 Shutdown initiated...")
+        await self.cleanup()
+        sys.exit(0)
+
+# ======================
+# MAIN ENTRY POINT
+# ======================
+async def main():
+    """Main entry point"""
+    bot = WhisperBot()
+    await bot.run()
 
 if __name__ == '__main__':
-    print("=" * 60)
-    print("🚀 Starting ShriBots Whisper Bot v4.0")
-    print("📚 With COMPLETE HISTORY TRACKING")
-    print("=" * 60)
-    
     # Check environment variables
     required_vars = ['API_ID', 'API_HASH', 'BOT_TOKEN']
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     
     if missing_vars:
         print(f"❌ Missing environment variables: {', '.join(missing_vars)}")
-        print("⚠️  Please set these in Render environment variables")
-        exit(1)
+        print("💡 Set them with:")
+        print("   export API_ID=your_api_id")
+        print("   export API_HASH=your_api_hash")
+        print("   export BOT_TOKEN=your_bot_token")
+        sys.exit(1)
     
-    print(f"📝 Environment: API_ID={API_ID}, PORT={PORT}")
-    print("🔄 Starting bot...")
-    
+    # Run the bot
     try:
-        # Start web server
-        start_web_server()
-        
-        # Start the bot
-        bot.start()
-        bot.loop.run_until_complete(main())
-        
-        print("=" * 60)
-        print("✅ Bot started successfully!")
-        print("💡 Key Features:")
-        print("   1. Remembers ALL your past whispers")
-        print("   2. Shows ALL recipients when you type @bot_username")
-        print("   3. Every username/userID is saved forever")
-        print("   4. Personal stats with /stats command")
-        print("=" * 60)
-        print("🔄 Bot is now running...")
-        print(f"🌐 Web Dashboard: http://localhost:{PORT}")
-        
-        # Keep the bot running
-        bot.run_until_disconnected()
-        
+        asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n🛑 Bot stopped by user")
+        print("\n🛑 Bot stopped")
     except Exception as e:
-        logger.error(f"❌ Failed to start bot: {e}")
-        print(f"❌ Error: {e}")
-    finally:
-        print("💾 Saving data before exit...")
-        save_data()
+        logger.error(f"❌ Fatal error: {e}")
+        sys.exit(1)
