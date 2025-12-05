@@ -1,400 +1,441 @@
+#!/usr/bin/env python3
+"""
+SHRIBOTS WHISPER BOT
+Actual Working Bot - Anonymous Message System
+"""
+
 import os
 import sys
 import json
 import logging
-import asyncio
 import re
+import asyncio
 from datetime import datetime
 from telethon import TelegramClient, events, Button
+from telethon.tl.types import User
 
-# Configure logging
+# ===================== CONFIGURATION =====================
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Environment variables
+# Environment Variables (Render pe set kare)
 API_ID = int(os.getenv('API_ID', '25136703'))
 API_HASH = os.getenv('API_HASH', 'accfaf5ecd981c67e481328515c39f89')
-BOT_TOKEN = os.getenv('BOT_TOKEN', '8366493122:AAG7nl7a3BqXd8-oyTAHovAjc7UUuLeHb-4')
+BOT_TOKEN = os.getenv('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '8027090675'))
 
-# Initialize bot
-try:
-    bot = TelegramClient('whisper_bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-    logger.info("✅ Bot client initialized successfully")
-except Exception as e:
-    logger.error(f"❌ Failed to initialize bot: {e}")
-    raise
+# ===================== BOT INITIALIZE =====================
+bot = TelegramClient('shribots_whisper', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+logger.info("✅ ShriBots Whisper Bot Started!")
 
-# Storage
-messages_db = {}
-user_cooldown = {}
+# ===================== DATA STORAGE =====================
+messages_db = {}  # Live messages store hote hai yahan
+user_cooldown = {}  # Spam rokne ke liye
+cooldown_seconds = 3  # Har user 3 second mein ek baar
 
-# Recent users storage
+# Recent Users File Storage
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 RECENT_USERS_FILE = os.path.join(DATA_DIR, "recent_users.json")
-recent_users = {}
 
-def load_recent_users():
-    """Load recent users from file"""
-    global recent_users
-    try:
-        if os.path.exists(RECENT_USERS_FILE):
-            with open(RECENT_USERS_FILE, 'r', encoding='utf-8') as f:
-                recent_users = json.load(f)
-            logger.info(f"✅ Loaded {len(recent_users)} recent users")
-    except Exception as e:
-        logger.error(f"❌ Error loading recent users: {e}")
+# Load recent users
+try:
+    if os.path.exists(RECENT_USERS_FILE):
+        with open(RECENT_USERS_FILE, 'r', encoding='utf-8') as f:
+            recent_users = json.load(f)
+        logger.info(f"📂 Loaded {len(recent_users)} recent users")
+    else:
         recent_users = {}
+        with open(RECENT_USERS_FILE, 'w', encoding='utf-8') as f:
+            json.dump({}, f)
+except:
+    recent_users = {}
 
+# ===================== HELPER FUNCTIONS =====================
 def save_recent_users():
-    """Save recent users to file"""
+    """Recent users ko file mein save kare"""
     try:
         with open(RECENT_USERS_FILE, 'w', encoding='utf-8') as f:
             json.dump(recent_users, f, indent=2, ensure_ascii=False)
-        logger.info(f"💾 Saved {len(recent_users)} recent users")
     except Exception as e:
-        logger.error(f"❌ Error saving recent users: {e}")
+        logger.error(f"❌ Save error: {e}")
 
-def add_to_recent_users(sender_id, target_user_id, target_username=None, target_first_name=None):
-    """Add user to recent users list with proper formatting"""
+def add_recent_user(target_id, username=None, first_name=None):
+    """Naye user ko recent list mein add kare"""
     try:
-        user_key = str(target_user_id)
+        user_key = str(target_id)
         
-        # Format first name for display
-        if target_first_name and len(target_first_name) > 20:
-            target_first_name = target_first_name[:17] + "..."
+        # Purane entries clean kare (max 10 rakhe)
+        if len(recent_users) >= 10:
+            # Sabse purana entry hatao
+            oldest = None
+            oldest_time = None
+            for key, data in recent_users.items():
+                if oldest_time is None or data.get('last_used', '') < oldest_time:
+                    oldest_time = data.get('last_used', '')
+                    oldest = key
+            if oldest:
+                del recent_users[oldest]
         
+        # Naya entry add kare
         recent_users[user_key] = {
-            'user_id': target_user_id,
-            'username': target_username,
-            'first_name': target_first_name if target_first_name else 'User',
+            'id': target_id,
+            'username': username,
+            'first_name': first_name or 'User',
             'last_used': datetime.now().isoformat()
         }
         
-        # Keep only last 10 users (based on last_used)
-        if len(recent_users) > 10:
-            # Sort by last_used and keep only newest 10
-            sorted_items = sorted(
-                recent_users.items(),
-                key=lambda x: x[1].get('last_used', ''),
-                reverse=True
-            )[:10]
-            recent_users.clear()
-            recent_users.update(dict(sorted_items))
-        
         save_recent_users()
-        logger.info(f"✅ Added user to recent: {target_first_name or target_username or target_user_id}")
+        logger.info(f"➕ Added recent user: {first_name or username or target_id}")
         
     except Exception as e:
-        logger.error(f"Error adding to recent users: {e}")
+        logger.error(f"❌ Add recent user error: {e}")
 
 def get_recent_users_display():
-    """Get formatted recent users list for display"""
+    """Recent users ko display ke liye format kare"""
     if not recent_users:
-        return "No recent users yet.\nSend a whisper to someone first!"
+        return "📭 *No recent users yet.*\nSend your first whisper to see users here!"
     
-    # Sort by last_used (newest first)
+    display = "👥 *Recent Users (Click to send):*\n\n"
+    
+    # Sort by last used (newest first)
     sorted_users = sorted(
         recent_users.items(),
         key=lambda x: x[1].get('last_used', ''),
         reverse=True
     )
     
-    display_text = "**Recent Users:**\n\n"
-    for i, (user_key, user_data) in enumerate(sorted_users[:10], 1):
-        username = user_data.get('username', '')
-        first_name = user_data.get('first_name', 'User')
+    for i, (user_id, data) in enumerate(sorted_users[:8], 1):
+        username = data.get('username')
+        first_name = data.get('first_name', 'User')
         
         if username:
-            display = f"@{username}"
+            display_name = f"@{username}"
         else:
-            display = first_name
+            display_name = first_name
         
-        # Add emoji based on position
-        emoji = "👤"
-        if i == 1:
-            emoji = "🥇"
-        elif i == 2:
-            emoji = "🥈"
-        elif i == 3:
-            emoji = "🥉"
+        # Emoji based on position
+        if i == 1: emoji = "🥇"
+        elif i == 2: emoji = "🥈"
+        elif i == 3: emoji = "🥉"
+        else: emoji = "👤"
         
-        display_text += f"{emoji} {display}\n"
+        display += f"{emoji} {display_name}\n"
     
-    display_text += "\n**Type:** `message @username` below any user"
-    return display_text
+    display += "\n💡 *Tip:* Click any user above or type `message @username`"
+    return display
 
-def get_recent_users_buttons():
-    """Get buttons for recent users"""
-    if not recent_users:
-        return []
-    
-    # Sort by last_used (newest first)
-    sorted_users = sorted(
-        recent_users.items(),
-        key=lambda x: x[1].get('last_used', ''),
-        reverse=True
-    )
-    
-    buttons = []
-    for user_key, user_data in sorted_users[:5]:
-        username = user_data.get('username', '')
-        first_name = user_data.get('first_name', 'User')
-        
-        if username:
-            display = f"@{username}"
-            query = f"@{username}"
-        else:
-            display = first_name
-            query = first_name
-        
-        # Truncate if too long
-        if len(display) > 15:
-            display = display[:12] + "..."
-        
-        buttons.append([Button.switch_inline(
-            f"🔒 {display}",
-            query=query,
-            same_peer=True
-        )])
-    
-    return buttons
-
-def is_cooldown(user_id):
-    """Check if user is in cooldown"""
+def is_on_cooldown(user_id):
+    """Check if user is in cooldown period"""
     now = datetime.now().timestamp()
     if user_id in user_cooldown:
-        if now - user_cooldown[user_id] < 2:
+        if now - user_cooldown[user_id] < cooldown_seconds:
             return True
     user_cooldown[user_id] = now
     return False
 
-# WELCOME TEXT
+def extract_target_and_message(text):
+    """
+    Text se target user aur message alag kare
+    Multiple formats support:
+    - "Hello @username"
+    - "@username Hello"
+    - "Message 123456789"
+    - "123456789 Message"
+    """
+    text = text.strip()
+    
+    # Pattern 1: Ends with @username
+    match = re.search(r'@([a-zA-Z][a-zA-Z0-9_]{4,30})$', text)
+    if match:
+        target = match.group(1)
+        message = text[:text.rfind(f"@{target}")].strip()
+        return target, message, 'username'
+    
+    # Pattern 2: Ends with user ID
+    match = re.search(r'(\d{8,})$', text)
+    if match:
+        target = match.group(1)
+        message = text[:text.rfind(target)].strip()
+        return target, message, 'userid'
+    
+    # Pattern 3: Contains @username anywhere
+    match = re.search(r'@([a-zA-Z][a-zA-Z0-9_]{4,30})', text)
+    if match:
+        target = match.group(1)
+        message = text.replace(f"@{target}", "").strip()
+        return target, message, 'username'
+    
+    # Pattern 4: Contains user ID anywhere
+    match = re.search(r'(\d{8,})', text)
+    if match:
+        target = match.group(1)
+        message = text.replace(target, "").strip()
+        return target, message, 'userid'
+    
+    return None, text, 'unknown'
+
+# ===================== WELCOME & HELP TEXTS =====================
 WELCOME_TEXT = """
 ╔══════════════════════╗
-║     🎭 𝗦𝗛𝗥𝗜𝗕𝗢𝗧𝗦     ║ 𝐏𝐨𝐰𝐞𝐫𝐞𝐝 𝐛𝐲
-║    𝗪𝗛𝗜𝗦𝗣𝗘𝗥 𝗕𝗢𝗧    ║      𝐀𝐫𝐭𝐢𝐬𝐭
+║     🎭 𝗦𝗛𝗥𝗜𝗕𝗢𝗧𝗦     ║
+║    𝗪𝗛𝗜𝗦𝗣𝗘𝗥 𝗕𝗢𝗧    ║
 ╚══════════════════════╝
 
-🤫 Welcome to Secret Whisper Bot!
+🤫 *Send Anonymous Secret Messages*
 
-🔒 Send anonymous secret messages
-🚀 Only intended recipient can read
-🎯 Easy to use inline mode
+🔒 **How it works:**
+1. Type `@{}` in any chat
+2. Write your message
+3. Add @username OR user ID
+4. Send!
 
-**Recent users will appear below for quick sending!**
+🎯 **Only the mentioned user can read it!**
 
-**Usage:** `@bot_username message @username`
-**Example:** `@bot_username Hello! @shribots`
-**OR:** `@bot_username Hello! 123456789`
+💡 **Try now:** Type `@{} Hello! @username`
 """
 
-# Load recent users on startup
-load_recent_users()
+HELP_TEXT = """
+📖 *How to Use Whisper Bot*
 
+🔤 **INLINE MODE:**
+1. Go to any chat
+2. Type: `@{}`
+3. Write your message
+4. Add @username OR user ID at end
+5. Send!
+
+📝 **EXAMPLES:**
+• `@{} Hello! @username`
+• `@{} I miss you 123456789`
+• `@{} Good morning! @john`
+
+⚡ **FEATURES:**
+✅ 100% Anonymous
+✅ Only recipient can read
+✅ Works with @username
+✅ Works with user ID
+✅ Recent users memory
+
+🛡️ **PRIVACY:**
+• No one can see who sent
+• Message not stored long
+• Your identity protected
+
+🔒 *Your secrets are safe with us!*
+"""
+
+# ===================== COMMAND HANDLERS =====================
 @bot.on(events.NewMessage(pattern='/start'))
-async def start_handler(event):
+async def start_command(event):
+    """Start command handler"""
     try:
-        logger.info(f"🚀 Start command from user: {event.sender_id}")
+        bot_username = (await bot.get_me()).username
         
-        # Get recent users display
+        # Welcome message with recent users
+        welcome_msg = WELCOME_TEXT.format(bot_username, bot_username)
         recent_display = get_recent_users_display()
         
-        full_text = WELCOME_TEXT + "\n\n" + recent_display
+        full_message = welcome_msg + "\n\n" + recent_display
         
         buttons = [
             [Button.switch_inline("🚀 Send Whisper Now", query="")],
-            [Button.inline("📖 Help", data="help")]
+            [Button.inline("📖 How to Use", data="show_help")]
         ]
         
-        # Add recent user buttons if available
-        recent_buttons = get_recent_users_buttons()
-        if recent_buttons:
-            buttons = recent_buttons + buttons
-        
-        await event.reply(full_text, buttons=buttons)
+        await event.reply(full_message, buttons=buttons)
+        logger.info(f"👋 User {event.sender_id} started bot")
         
     except Exception as e:
         logger.error(f"Start error: {e}")
-        await event.reply("❌ An error occurred. Please try again.")
+        await event.reply("❌ Sorry, something went wrong!")
 
 @bot.on(events.NewMessage(pattern='/help'))
-async def help_handler(event):
+async def help_command(event):
+    """Help command handler"""
     try:
         bot_username = (await bot.get_me()).username
-        help_text = f"""
-📖 **How to Use Whisper Bot**
-
-**Usage:**
-`@{bot_username} message @username`
-`@{bot_username} message 123456789`
-
-**Examples:**
-• `@{bot_username} Hello! @shribots`
-• `@{bot_username} I miss you 123456789`
-• `@{bot_username} How are you? 8027090675`
-
-**Features:**
-• Send anonymous messages
-• Only recipient can read
-• Recent users shown for quick sending
-• Works with username or user ID
-• Space flexible - works with or without spaces
-
-**Recent Users:**
-Last 10 users will be shown for quick sending.
-
-🔒 **Only the mentioned user can read your message!**
-"""
+        help_msg = HELP_TEXT.format(bot_username, bot_username, bot_username)
         
         await event.reply(
-            help_text,
+            help_msg,
             buttons=[
                 [Button.switch_inline("🚀 Try Now", query="")],
-                [Button.inline("🔙 Back", data="back_start")]
+                [Button.inline("🔙 Back", data="back_to_start")]
             ]
         )
+        
     except Exception as e:
         logger.error(f"Help error: {e}")
-        await event.reply("❌ An error occurred. Please try again.")
+        await event.reply("❌ Error showing help!")
 
 @bot.on(events.NewMessage(pattern='/stats'))
-async def stats_handler(event):
-    if event.sender_id != ADMIN_ID:
-        await event.reply("❌ Admin only command!")
-        return
-        
-    try:
-        stats_text = f"""
-📊 **Admin Statistics**
-
-👥 Recent Users: {len(recent_users)}
-💬 Active Messages: {len(messages_db)}
-🆔 Admin ID: {ADMIN_ID}
-🤖 Bot: @{(await bot.get_me()).username}
-
-**Recent Users List:**
-"""
-        
-        # Add recent users to stats
-        if recent_users:
-            for i, (user_id, user_data) in enumerate(list(recent_users.items())[:5], 1):
-                username = user_data.get('username', 'No username')
-                first_name = user_data.get('first_name', 'User')
-                stats_text += f"\n{i}. {first_name} (@{username})"
-        else:
-            stats_text += "\nNo recent users yet."
-        
-        stats_text += f"\n\n**Last Updated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        
-        await event.reply(stats_text)
-    except Exception as e:
-        logger.error(f"Stats error: {e}")
-        await event.reply("❌ Error fetching statistics.")
-
-@bot.on(events.NewMessage(pattern='/clear'))
-async def clear_handler(event):
-    if event.sender_id != ADMIN_ID:
+async def stats_command(event):
+    """Admin statistics"""
+    if str(event.sender_id) != str(ADMIN_ID):
         await event.reply("❌ Admin only command!")
         return
     
     try:
-        global recent_users
-        old_count = len(recent_users)
-        recent_users = {}
-        save_recent_users()
-        await event.reply(f"✅ Cleared {old_count} recent users!")
-    except Exception as e:
-        logger.error(f"Clear error: {e}")
-        await event.reply("❌ Error clearing recent users!")
+        bot_info = await bot.get_me()
+        stats_msg = f"""
+📊 *ADMIN STATISTICS*
 
-@bot.on(events.InlineQuery)
-async def inline_handler(event):
-    """Handle inline queries - MAIN WHISPER FUNCTION"""
+🤖 **Bot:** @{bot_info.username}
+🆔 **Bot ID:** {bot_info.id}
+👑 **Admin ID:** {ADMIN_ID}
+
+📈 **Usage Stats:**
+• Recent Users: {len(recent_users)}
+• Active Messages: {len(messages_db)}
+• Cooldown Users: {len(user_cooldown)}
+
+👥 **Recent Users List:**
+"""
+        # Add recent users to stats
+        if recent_users:
+            for i, (uid, data) in enumerate(list(recent_users.items())[:5], 1):
+                name = data.get('first_name', 'User')
+                username = data.get('username', 'No username')
+                stats_msg += f"\n{i}. {name} (@{username})"
+        else:
+            stats_msg += "\nNo recent users yet."
+        
+        stats_msg += f"\n\n⏰ *Last Updated:* {datetime.now().strftime('%H:%M:%S')}"
+        
+        await event.reply(stats_msg)
+        
+    except Exception as e:
+        logger.error(f"Stats error: {e}")
+        await event.reply("❌ Error fetching stats!")
+
+@bot.on(events.NewMessage(pattern='/recent'))
+async def recent_command(event):
+    """Show recent users"""
     try:
-        # Check cooldown
-        if is_cooldown(event.sender_id):
-            await event.answer([])
-            return
-        
-        # Get recent users display
         recent_display = get_recent_users_display()
-        
-        # If no query text, show recent users and instructions
-        if not event.text or not event.text.strip():
-            result_text = f"{recent_display}\n\n**Or type your message below:**\n`message @username`"
-            
-            result = event.builder.article(
-                title="🤫 Whisper Bot - Send Secret Message",
-                description="Select recent user or type: message @username",
-                text=result_text,
-                buttons=get_recent_users_buttons()
-            )
-            await event.answer([result])
+        await event.reply(
+            recent_display,
+            buttons=[[Button.switch_inline("💌 Send to Recent User", query="")]]
+        )
+    except Exception as e:
+        logger.error(f"Recent error: {e}")
+        await event.reply("❌ Error showing recent users!")
+
+# ===================== INLINE QUERY HANDLER =====================
+@bot.on(events.InlineQuery)
+async def inline_query_handler(event):
+    """Main inline query handler - YAHAN WHISPER BANTA HAI"""
+    try:
+        # Cooldown check
+        if is_on_cooldown(event.sender_id):
+            await event.answer([
+                event.builder.article(
+                    title="⏳ Please wait...",
+                    description=f"Wait {cooldown_seconds} seconds between messages",
+                    text="**⏳ Slow down!**\n\nPlease wait a few seconds before sending another message."
+                )
+            ])
             return
         
-        # Process the query text
+        bot_username = (await bot.get_me()).username
+        
+        # Agar koi text nahi hai (empty query)
+        if not event.text or not event.text.strip():
+            recent_display = get_recent_users_display()
+            
+            # Recent users ke buttons banaye
+            buttons = []
+            if recent_users:
+                sorted_recents = sorted(
+                    recent_users.items(),
+                    key=lambda x: x[1].get('last_used', ''),
+                    reverse=True
+                )[:5]
+                
+                for uid, data in sorted_recents:
+                    username = data.get('username')
+                    first_name = data.get('first_name', 'User')
+                    
+                    if username:
+                        display = f"@{username}"
+                        query_text = f"@{username}"
+                    else:
+                        display = first_name
+                        query_text = first_name
+                    
+                    buttons.append([Button.switch_inline(
+                        f"🔒 {display[:15]}",
+                        query=query_text
+                    )])
+            
+            result_text = f"""🤫 *ShriBots Whisper Bot*
+
+{recent_display}
+
+**Or type your message:**
+`message @username`
+**Example:** `Hello! @username`
+
+💡 *Quick send:* Click any user above"""
+            
+            await event.answer([
+                event.builder.article(
+                    title="🔐 Send Secret Message",
+                    description="Type: message @username OR click recent user",
+                    text=result_text,
+                    buttons=buttons if buttons else None
+                )
+            ])
+            return
+        
+        # Agar text hai to process kare
         query_text = event.text.strip()
         logger.info(f"📝 Inline query: '{query_text}' from {event.sender_id}")
         
-        # Try multiple patterns to extract target user
-        target = None
-        message_text = query_text
-        target_type = None
+        # Target user aur message alag kare
+        target, message_text, target_type = extract_target_and_message(query_text)
         
-        # Pattern 1: Ends with @username
-        match = re.search(r'@([a-zA-Z][a-zA-Z0-9_]{3,30})$', query_text)
-        if match:
-            target = match.group(1)
-            message_text = query_text[:query_text.rfind(f"@{target}")].strip()
-            target_type = 'username'
+        # Debug info
+        logger.info(f"🎯 Target: {target}, Type: {target_type}, Message: {message_text}")
         
-        # Pattern 2: Ends with user ID
+        # Check if target found
         if not target:
-            match = re.search(r'(\d{5,})$', query_text)
-            if match:
-                target = match.group(1)
-                message_text = query_text[:query_text.rfind(target)].strip()
-                target_type = 'userid'
-        
-        # Pattern 3: Contains @username anywhere
-        if not target:
-            match = re.search(r'@([a-zA-Z][a-zA-Z0-9_]{3,30})', query_text)
-            if match:
-                target = match.group(1)
-                message_text = query_text.replace(f"@{target}", "").strip()
-                target_type = 'username'
-        
-        # Pattern 4: Contains user ID anywhere
-        if not target:
-            match = re.search(r'(\d{5,})', query_text)
-            if match:
-                target = match.group(1)
-                message_text = query_text.replace(target, "").strip()
-                target_type = 'userid'
-        
-        # If still no target found
-        if not target:
+            # Target nahi mila
+            recent_display = get_recent_users_display()
             result = event.builder.article(
                 title="❌ No target user found",
                 description="Use: message @username OR message 123456789",
-                text=f"**No target user found in your message!**\n\n{recent_display}\n\n**Format:** `message @username`\n**Example:** `Hello! @username`",
-                buttons=get_recent_users_buttons()
+                text=f"""**❌ No target user found!**
+
+{recent_display}
+
+**Correct format:** `message @username`
+**Examples:**
+• `Hello! @username`
+• `I miss you 123456789`
+• `Good morning @john`
+
+💡 *Quick send:* Click recent user above""",
+                buttons=[
+                    [Button.switch_inline("🔄 Try Again", query=query_text)]
+                ]
             )
             await event.answer([result])
             return
         
-        # Check if message is empty
+        # Check if message empty
         if not message_text or len(message_text.strip()) < 1:
             result = event.builder.article(
                 title="❌ Message is empty",
-                description="Add a message before @username or user ID",
-                text=f"**Your message is empty!**\n\n**Format:** `Your message here @username`\n\n{recent_display}",
-                buttons=get_recent_users_buttons()
+                description="Add your message before @username",
+                text="**❌ Your message is empty!**\n\n**Format:** `Your message here @username`\n**Example:** `Hello! How are you? @username`",
+                buttons=[
+                    [Button.switch_inline("✏️ Add Message", query=f"@{target}" if target_type=='username' else target)]
+                ]
             )
             await event.answer([result])
             return
@@ -402,83 +443,105 @@ async def inline_handler(event):
         # Check message length
         if len(message_text) > 1000:
             result = event.builder.article(
-                title="❌ Message Too Long",
+                title="❌ Message too long",
                 description="Maximum 1000 characters allowed",
-                text="❌ Your message is too long! Please keep it under 1000 characters."
+                text="**❌ Message too long!**\n\nPlease keep your message under 1000 characters.",
+                buttons=[
+                    [Button.switch_inline("📝 Shorten Message", query=query_text[:900])]
+                ]
             )
             await event.answer([result])
             return
         
-        # Process the target user
+        # Ab target user ki details nikalte hai
         target_id = None
         target_name = "User"
-        user_obj = None
+        user_found = False
         
         try:
             if target_type == 'userid':
-                # Try to get user by ID
+                # User ID se search kare
                 target_id = int(target)
                 try:
-                    user_obj = await bot.get_entity(target_id)
-                    if hasattr(user_obj, 'first_name'):
-                        target_name = user_obj.first_name
+                    user_entity = await bot.get_entity(target_id)
+                    if isinstance(user_entity, User):
+                        target_name = user_entity.first_name or "User"
+                        if user_entity.username:
+                            add_recent_user(target_id, user_entity.username, target_name)
+                        else:
+                            add_recent_user(target_id, None, target_name)
+                        user_found = True
                     else:
                         target_name = f"User {target}"
+                        add_recent_user(target_id, None, target_name)
                 except:
-                    # User not found by ID
                     target_name = f"User {target}"
-                    target_id = int(target)  # Use the provided ID anyway
+                    target_id = int(target)
+                    add_recent_user(target_id, None, target_name)
+            
             else:
-                # Try to get user by username
+                # Username se search kare
                 try:
-                    user_obj = await bot.get_entity(target)
-                    if hasattr(user_obj, 'first_name'):
-                        target_name = user_obj.first_name
-                        target_id = user_obj.id
+                    user_entity = await bot.get_entity(target)
+                    if isinstance(user_entity, User):
+                        target_name = user_entity.first_name or "User"
+                        target_id = user_entity.id
+                        add_recent_user(target_id, target, target_name)
+                        user_found = True
                     else:
                         target_name = f"@{target}"
+                        target_id = abs(hash(target)) % 1000000000
+                        add_recent_user(target_id, target, target)
                 except:
-                    # Username not found
                     target_name = f"@{target}"
-                    # Generate a temporary ID for storage
                     target_id = abs(hash(target)) % 1000000000
-            
-            # Add to recent users
-            add_to_recent_users(
-                event.sender_id,
-                target_id,
-                target if target_type == 'username' else None,
-                target_name
-            )
-            
+                    add_recent_user(target_id, target, target)
+        
         except Exception as e:
-            logger.error(f"Error processing user {target}: {e}")
-            # Continue anyway with basic info
+            logger.error(f"User search error: {e}")
+            # Phir bhi continue kare
             if not target_id:
                 target_id = abs(hash(str(target))) % 1000000000
             target_name = f"@{target}" if target_type == 'username' else f"User {target}"
+            add_recent_user(target_id, target if target_type=='username' else None, target_name)
         
-        # Create unique message ID
+        # Unique message ID generate kare
         message_id = f'msg_{event.sender_id}_{target_id}_{int(datetime.now().timestamp())}'
         
-        # Store message
+        # Message store kare
         messages_db[message_id] = {
             'user_id': target_id,
             'msg': message_text,
             'sender_id': event.sender_id,
-            'timestamp': datetime.now().isoformat(),
+            'time': datetime.now().isoformat(),
             'target_name': target_name,
             'target_type': target_type
         }
         
-        # Create result
-        result_text = f"**🔐 A secret message for {target_name}!**\n\n"
-        result_text += f"*Note: Only {target_name} can open this message.*\n\n"
-        result_text += f"**Preview:** {message_text[:50]}..." if len(message_text) > 50 else f"**Preview:** {message_text}"
+        # Clean old messages (1 hour se purane)
+        current_time = datetime.now().timestamp()
+        expired_msgs = []
+        for msg_id, msg_data in messages_db.items():
+            msg_time = datetime.fromisoformat(msg_data['time']).timestamp()
+            if current_time - msg_time > 3600:  # 1 hour
+                expired_msgs.append(msg_id)
+        
+        for msg_id in expired_msgs:
+            del messages_db[msg_id]
+        
+        # Inline result banaye
+        preview = message_text[:50] + "..." if len(message_text) > 50 else message_text
+        result_text = f"""🔐 *Secret Message for {target_name}*
+
+*Note:* Only {target_name} can read this message!
+
+**Preview:** {preview}
+
+⚠️ *Warning:* This message will expire in 1 hour."""
         
         result = event.builder.article(
-            title=f"🔒 Secret Message for {target_name}",
-            description=f"Click to send secret message to {target_name}",
+            title=f"🔒 Secret for {target_name}",
+            description=f"Click to send secret message",
             text=result_text,
             buttons=[
                 [Button.inline("🔓 Show Message", message_id)],
@@ -487,137 +550,151 @@ async def inline_handler(event):
         )
         
         await event.answer([result])
+        logger.info(f"✅ Whisper created: {message_id} for {target_name}")
         
     except Exception as e:
-        logger.error(f"Inline query error: {e}")
+        logger.error(f"❌ Inline query error: {e}")
         result = event.builder.article(
             title="❌ Error",
             description="Something went wrong",
-            text="❌ An error occurred. Please try again in a moment."
+            text="**❌ Sorry, an error occurred!**\n\nPlease try again in a moment.",
         )
         await event.answer([result])
 
+# ===================== CALLBACK QUERY HANDLER =====================
 @bot.on(events.CallbackQuery)
-async def callback_handler(event):
-    """Handle button clicks"""
+async def callback_query_handler(event):
+    """Button clicks handle kare"""
     try:
         data = event.data.decode('utf-8')
         logger.info(f"🔘 Callback: {data} from {event.sender_id}")
         
-        if data == "help":
+        if data == "show_help":
             bot_username = (await bot.get_me()).username
-            help_text = f"""
-📖 **How to Use Whisper Bot**
-
-**Usage:**
-`@{bot_username} message @username`
-`@{bot_username} message 123456789`
-
-**Examples:**
-• `@{bot_username} Hello! @shribots`
-• `@{bot_username} I miss you 123456789`
-
-🔒 **Only the mentioned user can read your message!**
-"""
+            help_msg = HELP_TEXT.format(bot_username, bot_username, bot_username)
+            
             await event.edit(
-                help_text,
+                help_msg,
                 buttons=[
                     [Button.switch_inline("🚀 Try Now", query="")],
-                    [Button.inline("🔙 Back", data="back_start")]
+                    [Button.inline("🔙 Back", data="back_to_start")]
                 ]
             )
         
-        elif data == "back_start":
+        elif data == "back_to_start":
+            bot_username = (await bot.get_me()).username
+            welcome_msg = WELCOME_TEXT.format(bot_username, bot_username)
             recent_display = get_recent_users_display()
-            full_text = WELCOME_TEXT + "\n\n" + recent_display
             
-            buttons = [
-                [Button.switch_inline("🚀 Send Whisper Now", query="")],
-                [Button.inline("📖 Help", data="help")]
-            ]
+            full_message = welcome_msg + "\n\n" + recent_display
             
-            recent_buttons = get_recent_users_buttons()
-            if recent_buttons:
-                buttons = recent_buttons + buttons
-            
-            await event.edit(full_text, buttons=buttons)
+            await event.edit(
+                full_message,
+                buttons=[
+                    [Button.switch_inline("🚀 Send Whisper Now", query="")],
+                    [Button.inline("📖 How to Use", data="show_help")]
+                ]
+            )
         
         elif data.startswith("msg_"):
-            # Handle message opening
+            # Message open karne ka request
             message_data = messages_db.get(data)
             
             if not message_data:
-                await event.answer("❌ Message not found or expired!", alert=True)
+                await event.answer(
+                    "❌ Message expired or not found!\nMessages expire after 1 hour.",
+                    alert=True
+                )
                 return
             
+            sender_id = message_data['sender_id']
+            target_id = message_data['user_id']
+            current_user = event.sender_id
+            
             # Check permissions
-            if event.sender_id == message_data['user_id']:
-                # Target user - show full message
-                response = f"🔓 **Secret Message:**\n\n{message_data['msg']}"
+            if current_user == target_id:
+                # Target user hai - message dikhao
+                response = f"🔓 *Secret Message:*\n\n{message_data['msg']}\n\n_This message will auto-delete soon._"
                 await event.answer(response, alert=True)
-            elif event.sender_id == message_data['sender_id']:
-                # Sender viewing their own message
-                response = f"📝 **You sent:**\n\n{message_data['msg']}\n\nTo: {message_data['target_name']}"
+                
+                # Message delete kar do (optional)
+                # del messages_db[data]
+                
+            elif current_user == sender_id:
+                # Sender khud dekh raha hai
+                response = f"📝 *You sent to {message_data['target_name']}:*\n\n{message_data['msg']}"
                 await event.answer(response, alert=True)
+                
             else:
                 # Unauthorized user
-                await event.answer("🔒 This message is not for you!", alert=True)
+                await event.answer(
+                    f"🔒 This message is for {message_data['target_name']} only!",
+                    alert=True
+                )
         
         else:
             await event.answer("❌ Invalid button!", alert=True)
-            
+    
     except Exception as e:
-        logger.error(f"Callback error: {e}")
-        await event.answer("❌ An error occurred. Please try again.", alert=True)
+        logger.error(f"❌ Callback error: {e}")
+        await event.answer("❌ Error processing request!", alert=True)
 
+# ===================== BOT STARTUP =====================
 async def main():
-    """Main function to start the bot"""
+    """Bot startup function"""
     try:
-        me = await bot.get_me()
-        logger.info(f"🎭 ShriBots Whisper Bot Started!")
-        logger.info(f"🤖 Bot: @{me.username}")
-        logger.info(f"🆔 Bot ID: {me.id}")
+        bot_info = await bot.get_me()
+        logger.info("=" * 50)
+        logger.info(f"🎭 SHRIBOTS WHISPER BOT STARTED!")
+        logger.info(f"🤖 Bot: @{bot_info.username}")
+        logger.info(f"🆔 ID: {bot_info.id}")
         logger.info(f"👑 Admin: {ADMIN_ID}")
         logger.info(f"👥 Recent Users: {len(recent_users)}")
-        logger.info("✅ Bot is ready and working!")
-        logger.info("🔗 Use /start to begin")
-        logger.info("📝 Inline usage: @bot_username message @username")
+        logger.info("=" * 50)
+        logger.info("✅ Bot is ready!")
+        logger.info("💡 Usage: @bot_username message @username")
+        logger.info("🔗 Support: @ShriBots")
+        
+        # Auto-save timer start kare (every 5 minutes)
+        async def auto_save():
+            while True:
+                await asyncio.sleep(300)  # 5 minutes
+                save_recent_users()
+                logger.info("💾 Auto-saved recent users")
+        
+        asyncio.create_task(auto_save())
+        
     except Exception as e:
-        logger.error(f"❌ Error in main: {e}")
+        logger.error(f"❌ Startup error: {e}")
         raise
 
-def run_bot():
-    """Run the Telegram bot"""
-    print("🚀 Starting ShriBots Whisper Bot...")
-    print(f"📝 Environment: API_ID={API_ID}")
-    print(f"🤖 Bot Token: {BOT_TOKEN[:10]}...")
-    print(f"👑 Admin: {ADMIN_ID}")
+# ===================== RUN BOT =====================
+if __name__ == "__main__":
+    print("\n" + "="*50)
+    print("🚀 STARTING SHRIBOTS WHISPER BOT")
+    print("="*50)
     
     try:
-        # Load recent users
-        load_recent_users()
-        
-        # Start the bot
+        # Bot start kare
         bot.start()
+        
+        # Main function run kare
         bot.loop.run_until_complete(main())
         
         print("✅ Bot started successfully!")
-        print("🔄 Bot is now running...")
-        print("💡 Use /start in Telegram to begin")
-        print("📝 Recent users loaded:", len(recent_users))
+        print("🔄 Running... (Press Ctrl+C to stop)")
+        print("📝 Check logs for details")
         
-        # Keep the bot running
+        # Bot run karte rahe
         bot.run_until_disconnected()
         
     except KeyboardInterrupt:
         print("\n🛑 Bot stopped by user")
     except Exception as e:
-        logger.error(f"❌ Failed to start bot: {e}")
-        print(f"❌ Error: {e}")
+        print(f"\n❌ Error: {e}")
+        logger.error(f"Fatal error: {e}")
     finally:
-        print("💾 Saving data before exit...")
+        # Data save kare before exit
+        print("💾 Saving data...")
         save_recent_users()
         print("👋 Goodbye!")
-
-if __name__ == '__main__':
-    run_bot()
