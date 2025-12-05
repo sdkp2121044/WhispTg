@@ -40,20 +40,35 @@ async def handle_inline_query(event):
         # Get user's history
         user_history = history_manager.get_user_history(user_id)
         
-        # Case 1: Empty query - Show ALL past recipients
+        # Case 1: Empty query - Show ALL past recipients WITH NAMES
         if not query_text:
             if user_history:
-                # Create buttons for ALL past recipients
+                # Create detailed list of recipients
+                history_text = "📋 **Your Past Recipients:**\n\n"
+                
+                for i, recipient in enumerate(user_history[:8], 1):  # Show first 8
+                    name = recipient['name']
+                    username = recipient.get('username')
+                    count = recipient.get('count', 1)
+                    
+                    if username:
+                        history_text += f"{i}. **{name}** (@{username}) - {count} whispers\n"
+                    else:
+                        history_text += f"{i}. **{name}** - {count} whispers\n"
+                
+                history_text += f"\n💡 **Tap any name above to whisper again!**"
+                
+                # Create buttons for each recipient
                 buttons = []
-                for recipient in user_history[:10]:  # Show first 10
+                for recipient in user_history[:6]:  # Max 6 buttons
                     name = recipient['name']
                     username = recipient.get('username')
                     
                     if username:
-                        display_text = f"@{username}"
+                        display_text = f"💬 @{username}"
                         query_suffix = f" @{username}"
                     else:
-                        display_text = name
+                        display_text = f"👤 {name}"
                         query_suffix = f" {recipient['id']}"
                     
                     # Truncate if too long
@@ -68,12 +83,15 @@ async def handle_inline_query(event):
                         )
                     ])
                 
-                result_text = "📋 **Select from your past recipients or type a new message:**"
+                # Add a "Type new" button
+                buttons.append([
+                    Button.switch_inline("✏️ Type New Message", query="")
+                ])
                 
                 result = event.builder.article(
                     title="🤫 Your Past Recipients",
-                    description=f"{len(user_history)} recipients available",
-                    text=result_text,
+                    description=f"{len(user_history)} recipients - Tap any",
+                    text=history_text,
                     buttons=buttons
                 )
                 
@@ -82,15 +100,15 @@ async def handle_inline_query(event):
                 result_text = """
 🤫 **Send a Secret Whisper**
 
-💡 **How to send:**
-1. Type your message
+📱 **How to send:**
+1. Type your message below
 2. Add @username OR user ID
 3. Send!
 
-📱 **Examples:**
+✨ **Examples:**
 • `Hello! @username`
 • `How are you 123456789`
-• `Hi there @telegram_user`
+• `Hi @telegram_user`
 
 🔒 **Only they can read your message!**
                 """
@@ -105,7 +123,67 @@ async def handle_inline_query(event):
             await event.answer([result])
             return
         
-        # Case 2: Query has content - Detect recipient instantly
+        # Case 2: Query has "list" or "history" keyword
+        if query_text.lower() in ['list', 'history', 'recipients', 'show']:
+            if user_history:
+                # Show recipients list with details
+                result_text = "📜 **Select a recipient to whisper:**\n\n"
+                
+                for i, recipient in enumerate(user_history[:10], 1):
+                    name = recipient['name']
+                    username = recipient.get('username')
+                    
+                    if username:
+                        result_text += f"{i}. **{name}** (@{username})\n"
+                    else:
+                        result_text += f"{i}. **{name}**\n"
+                
+                result_text += f"\n📊 **Total:** {len(user_history)} recipients"
+                
+                # Create direct action buttons
+                buttons = []
+                for recipient in user_history[:8]:
+                    name = recipient['name']
+                    username = recipient.get('username')
+                    
+                    if username:
+                        display = f"💌 @{username}"
+                        query = f" @{username}"
+                    else:
+                        display = f"📨 {name}"
+                        query = f" {recipient['id']}"
+                    
+                    if len(display) > 20:
+                        display = display[:17] + "..."
+                    
+                    buttons.append([
+                        Button.switch_inline(
+                            display,
+                            query=query,
+                            same_peer=True
+                        )
+                    ])
+                
+                result = event.builder.article(
+                    title="📋 Your Recipients List",
+                    description="Tap any name to message",
+                    text=result_text,
+                    buttons=buttons
+                )
+                
+                await event.answer([result])
+                return
+            else:
+                result = event.builder.article(
+                    title="📭 No History",
+                    description="Send your first whisper",
+                    text="You haven't whispered to anyone yet!",
+                    buttons=[[Button.switch_inline("🚀 Send First Whisper", query="")]]
+                )
+                await event.answer([result])
+                return
+        
+        # Case 3: Query has content - Detect recipient instantly
         detection_result = detector.extract_recipient_and_message(query_text)
         recipient, message_text, recipient_type = detection_result
         
@@ -126,16 +204,16 @@ async def handle_inline_query(event):
                 suggestion_text = "💡 **Add a recipient:**\nType @username or user ID after your message"
                 buttons = []
                 
-                for recipient in user_history[:5]:
-                    name = recipient['name']
-                    username = recipient.get('username')
+                for recipient_item in user_history[:5]:
+                    name = recipient_item['name']
+                    username = recipient_item.get('username')
                     
                     if username:
                         display = f"@{username}"
                         query = f"{query_text} @{username}"
                     else:
                         display = name
-                        query = f"{query_text} {recipient['id']}"
+                        query = f"{query_text} {recipient_item['id']}"
                     
                     buttons.append([
                         Button.switch_inline(
@@ -166,7 +244,7 @@ async def handle_inline_query(event):
             await event.answer([result])
             return
         
-        # Case 3: Recipient detected - Get user entity
+        # Case 4: Recipient detected - Get user entity
         try:
             if recipient_type == 'userid':
                 # Validate user ID
@@ -366,6 +444,55 @@ async def handle_callback_query(event):
                 # Someone else trying to view
                 await event.answer("🔒 This message is not for you!", alert=True)
                 
+        elif data == "admin_stats":
+            # Handle admin stats button
+            if event.sender_id != ADMIN_ID:
+                await event.answer("❌ Admin only!", alert=True)
+                return
+            
+            # Get bot info
+            bot_me = await bot.get_me()
+            
+            # Get stats
+            total_users = len(history_manager.get_all_user_ids())
+            total_messages = message_manager.get_message_count()
+            
+            stats_text = f"""
+📊 **Admin Statistics**
+
+🤖 **Bot Info:**
+• Username: @{bot_me.username}
+• ID: {bot_me.id}
+• Name: {bot_me.first_name}
+
+📈 **Usage Stats:**
+• Total Users: {total_users}
+• Total Messages: {total_messages}
+
+🕒 **Last Updated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            """
+            
+            await event.edit(stats_text, buttons=[[Button.inline("🔙 Back", "back_start")]])
+            
+        elif data == "clear_history":
+            # Handle clear history button
+            user_id = event.sender_id
+            
+            if history_manager.clear_user_history(user_id):
+                await event.answer("✅ History cleared!", alert=True)
+                await event.edit(
+                    "✅ **Your history has been cleared!**\n\n"
+                    "All past recipients have been removed.",
+                    buttons=[[Button.switch_inline("🚀 Send New Whisper", query="")]]
+                )
+            else:
+                await event.answer("❌ Error clearing history!", alert=True)
+                
+        elif data == "back_start":
+            # Handle back button
+            user_id = event.sender_id
+            await handle_start_command_back(event, user_id)
+            
         else:
             await event.answer("❌ Invalid button!", alert=True)
             
@@ -373,16 +500,11 @@ async def handle_callback_query(event):
         logger.error(f"Callback error: {e}")
         await event.answer("❌ An error occurred!", alert=True)
 
-# ======================
-# COMMAND HANDLERS
-# ======================
-async def handle_start_command(event):
-    """Handle /start command"""
+async def handle_start_command_back(event, user_id):
+    """Handle back to start command"""
     try:
-        user_id = event.sender_id
-        
-        # Get bot username FIRST with await
-        bot_me = await bot.get_me()  # ✅ FIXED: await added
+        # Get bot username
+        bot_me = await bot.get_me()
         bot_username = bot_me.username
         
         # Get user history stats
@@ -413,7 +535,7 @@ Type `@{bot_username}` in any chat
         if user_id == ADMIN_ID:
             buttons.append([Button.inline("📊 Admin Stats", "admin_stats")])
         
-        await event.reply(welcome_text, buttons=buttons)
+        await event.edit(welcome_text, buttons=buttons)
         
     except Exception as e:
         logger.error(f"Start command error: {e}")
@@ -470,6 +592,7 @@ async def handle_history_command(event):
             ])
         
         buttons.append([Button.inline("🗑️ Clear History", "clear_history")])
+        buttons.append([Button.inline("🔙 Back", "back_start")])
         
         await event.reply(history_text, buttons=buttons)
         
@@ -505,11 +628,12 @@ async def handle_stats_command(event):
             return
         
         # Get bot info
-        bot_me = await bot.get_me()  # ✅ FIXED: await added
+        bot_me = await bot.get_me()
         
         # Get stats from database
         total_users = len(history_manager.get_all_user_ids())
         total_messages = message_manager.get_message_count()
+        total_history = history_manager.get_total_history_count()
         
         stats_text = f"""
 📊 **Admin Statistics**
@@ -522,7 +646,7 @@ async def handle_stats_command(event):
 📈 **Usage Stats:**
 • Total Users: {total_users}
 • Total Messages: {total_messages}
-• Active Today: Calculating...
+• Total History Entries: {total_history}
 
 🕒 **Server:**
 • Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
