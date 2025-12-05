@@ -381,6 +381,10 @@ async def handle_start_command(event):
     try:
         user_id = event.sender_id
         
+        # Get bot username FIRST with await
+        bot_me = await bot.get_me()  # ✅ FIXED: await added
+        bot_username = bot_me.username
+        
         # Get user history stats
         user_history = history_manager.get_user_history(user_id)
         history_count = len(user_history)
@@ -397,7 +401,7 @@ async def handle_start_command(event):
 • Last used: {datetime.now().strftime('%Y-%m-%d')}
 
 💡 **How to use:**
-Type `@{bot.get_me().username}` in any chat
+Type `@{bot_username}` in any chat
         """
         
         buttons = [
@@ -491,6 +495,46 @@ async def handle_clear_command(event):
         logger.error(f"Clear command error: {e}")
         await event.reply("❌ Error occurred!")
 
+async def handle_stats_command(event):
+    """Handle /stats command"""
+    try:
+        user_id = event.sender_id
+        
+        if user_id != ADMIN_ID:
+            await event.reply("❌ Admin only command!")
+            return
+        
+        # Get bot info
+        bot_me = await bot.get_me()  # ✅ FIXED: await added
+        
+        # Get stats from database
+        total_users = len(history_manager.get_all_user_ids())
+        total_messages = message_manager.get_message_count()
+        
+        stats_text = f"""
+📊 **Admin Statistics**
+
+🤖 **Bot Info:**
+• Username: @{bot_me.username}
+• ID: {bot_me.id}
+• Name: {bot_me.first_name}
+
+📈 **Usage Stats:**
+• Total Users: {total_users}
+• Total Messages: {total_messages}
+• Active Today: Calculating...
+
+🕒 **Server:**
+• Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+• Status: ✅ Running
+        """
+        
+        await event.reply(stats_text)
+        
+    except Exception as e:
+        logger.error(f"Stats command error: {e}")
+        await event.reply("❌ Error loading stats!")
+
 # ======================
 # SETUP HANDLERS
 # ======================
@@ -523,13 +567,4 @@ def setup_handlers(bot_instance):
         await handle_clear_command(event)
     
     @bot.on(events.NewMessage(pattern='/stats'))
-    async def stats_handler_wrapper(event):
-        if event.sender_id == ADMIN_ID:
-            total_users = len(set(
-                uid for uid in history_manager.get_all_user_ids()
-            ))
-            await event.reply(f"📊 **Admin Stats:**\n• Total users: {total_users}")
-        else:
-            await event.reply("❌ Admin only!")
-    
-    logger.info("✅ Handlers setup complete")
+    async def stats_handler_wrapper(
