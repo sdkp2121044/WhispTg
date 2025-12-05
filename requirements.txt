@@ -2,9 +2,6 @@
 telethon==1.34.0
 Flask==2.3.3
 
-# Database
-sqlite3
-
 # Utilities
 python-dotenv==1.0.0
 pysocks==1.7.1
