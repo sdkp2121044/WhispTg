@@ -8,11 +8,31 @@ from datetime import datetime
 
 from telethon import TelegramClient
 
-from config import API_ID, API_HASH, BOT_TOKEN, logger, BOT_NAME
+from config import API_ID, API_HASH, BOT_TOKEN, logger, BOT_NAME, PORT
 from database import init_database, message_manager
 from handlers import setup_handlers
-from web_server import start_web_server
+from web_server import run_server
 from utils import cooldown_manager
+
+# ======================
+# IMPORTANT: Flask server को main thread में start करें
+# ======================
+import threading
+
+# Global variable to track server thread
+server_thread = None
+
+def start_web_server():
+    """Start web server in a separate thread"""
+    global server_thread
+    server_thread = threading.Thread(
+        target=run_server,
+        daemon=True,
+        name="WebServer"
+    )
+    server_thread.start()
+    logger.info(f"✅ Web server started on port {PORT}")
+    return server_thread
 
 # ======================
 # BOT INITIALIZATION
@@ -41,10 +61,8 @@ class WhisperBot:
             setup_handlers(self.bot)
             logger.info("✅ Handlers configured")
             
-            # Start web server
-            web_server_thread = start_web_server()
-            if web_server_thread:
-                logger.info("✅ Web server started")
+            # ✅ IMPORTANT: Start web server BEFORE bot starts
+            start_web_server()
             
             self.start_time = datetime.now()
             self.is_running = True
@@ -81,7 +99,7 @@ class WhisperBot:
             print(f"🔹 ID: {bot_info['id']}")
         
         print(f"🔹 Start Time: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"🔹 API ID: {API_ID}")
+        print(f"🔹 Web Server: http://0.0.0.0:{PORT}")
         print("="*60)
         print("✨ Features Active:")
         print("   • Instant User Detection (ANY format)")
@@ -128,14 +146,6 @@ class WhisperBot:
             # Print startup info
             await self.print_startup_info()
             
-            # Set up signal handlers
-            loop = asyncio.get_event_loop()
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(
-                    sig,
-                    lambda: asyncio.create_task(self.shutdown())
-                )
-            
             # Keep bot running
             await self.bot.run_until_disconnected()
             
@@ -145,22 +155,12 @@ class WhisperBot:
             logger.error(f"❌ Bot runtime error: {e}")
         finally:
             await self.cleanup()
-    
-    async def shutdown(self):
-        """Graceful shutdown"""
-        logger.info("🔻 Shutdown initiated...")
-        await self.cleanup()
-        sys.exit(0)
 
 # ======================
 # MAIN ENTRY POINT
 # ======================
 async def main():
     """Main entry point"""
-    bot = WhisperBot()
-    await bot.run()
-
-if __name__ == '__main__':
     # Check environment variables
     required_vars = ['API_ID', 'API_HASH', 'BOT_TOKEN']
     missing_vars = [var for var in required_vars if not os.getenv(var)]
@@ -172,6 +172,13 @@ if __name__ == '__main__':
         print("   export API_HASH=your_api_hash")
         print("   export BOT_TOKEN=your_bot_token")
         sys.exit(1)
+    
+    bot = WhisperBot()
+    await bot.run()
+
+if __name__ == '__main__':
+    # ✅ IMPORTANT: Web server को main thread से पहले start करें
+    print(f"🚀 Starting Whisper Bot on port {PORT}...")
     
     # Run the bot
     try:
