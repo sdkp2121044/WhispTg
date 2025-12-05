@@ -567,4 +567,7 @@ def setup_handlers(bot_instance):
         await handle_clear_command(event)
     
     @bot.on(events.NewMessage(pattern='/stats'))
-    async def stats_handler_wrapper(
+    async def stats_handler_wrapper(event):
+        await handle_stats_command(event)
+    
+    logger.info("✅ Handlers setup complete")
