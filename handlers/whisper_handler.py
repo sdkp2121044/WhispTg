@@ -238,3 +238,7 @@ class WhisperHandler:
                 text="❌ An error occurred. Please try again in a moment."
             )
             await event.answer([result])
+    
+    def get_message(self, message_id):
+        """Get message from database"""
+        return self.messages_db.get(message_id)
