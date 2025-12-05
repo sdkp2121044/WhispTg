@@ -538,6 +538,52 @@ Type `@{bot_username}` in any chat
         await event.edit(welcome_text, buttons=buttons)
         
     except Exception as e:
+        logger.error(f"Back command error: {e}")
+        await event.answer("❌ Error occurred!", alert=True)
+
+# ======================
+# COMMAND HANDLERS
+# ======================
+async def handle_start_command(event):
+    """Handle /start command"""
+    try:
+        user_id = event.sender_id
+        
+        # Get bot username FIRST with await
+        bot_me = await bot.get_me()
+        bot_username = bot_me.username
+        
+        # Get user history stats
+        user_history = history_manager.get_user_history(user_id)
+        history_count = len(user_history)
+        
+        welcome_text = f"""
+🤫 **Instant Whisper Bot**
+
+🔒 Send anonymous secret messages
+🚀 Only recipient can read
+🎯 Instant user detection
+
+📊 **Your stats:**
+• Past recipients: {history_count}
+• Last used: {datetime.now().strftime('%Y-%m-%d')}
+
+💡 **How to use:**
+Type `@{bot_username}` in any chat
+        """
+        
+        buttons = [
+            [Button.url("📢 Channel", f"https://t.me/{SUPPORT_CHANNEL}")],
+            [Button.url("👥 Group", f"https://t.me/{SUPPORT_GROUP}")],
+            [Button.switch_inline("🚀 Send Whisper", query="")],
+        ]
+        
+        if user_id == ADMIN_ID:
+            buttons.append([Button.inline("📊 Admin Stats", "admin_stats")])
+        
+        await event.reply(welcome_text, buttons=buttons)
+        
+    except Exception as e:
         logger.error(f"Start command error: {e}")
         await event.reply("❌ Error occurred!")
 
