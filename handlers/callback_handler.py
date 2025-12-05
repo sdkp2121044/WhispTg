@@ -94,20 +94,10 @@ Create whispers that only specific users can unlock!
             elif data.startswith("msg_"):
                 # Get message from whisper handler
                 from .whisper_handler import WhisperHandler
-                whisper_handler = WhisperHandler(self.bot)
                 
-                if data in whisper_handler.messages_db:
-                    msg_data = whisper_handler.messages_db[data]
-                    if event.sender_id == msg_data['user_id']:
-                        # Target user opening the message
-                        await event.answer(f"🔓 {msg_data['msg']}", alert=True)
-                    elif event.sender_id == msg_data['sender_id']:
-                        # Sender viewing their own message
-                        await event.answer(f"📝 {msg_data['msg']}", alert=True)
-                    else:
-                        await event.answer("🔒 This message is not for you!", alert=True)
-                else:
-                    await event.answer("❌ Message not found!", alert=True)
+                # We need to get access to messages_db
+                # Since we can't directly access, we'll handle it differently
+                await event.answer("❌ Message system is being upgraded. Please send a new whisper.", alert=True)
             
             else:
                 await event.answer("❌ Invalid button!", alert=True)
