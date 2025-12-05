@@ -1,9 +1,8 @@
 # database.py
 import json
-import pickle
+import os
 import sqlite3
 from datetime import datetime, timedelta
-from collections import OrderedDict
 import threading
 import logging
 
@@ -21,6 +20,9 @@ DB_FILE = os.path.join(DATA_DIR, "whisper_bot.db")
 def init_database():
     """Initialize SQLite database"""
     try:
+        # Create data directory if it doesn't exist
+        os.makedirs(DATA_DIR, exist_ok=True)
+        
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         
@@ -109,7 +111,7 @@ class UserHistoryManager:
                         VALUES (?, ?, ?, ?, 1)
                     ''', (user_id, recipient_id, recipient_name, recipient_username))
                 
-                # Clean old entries (keep only MAX_HISTORY_ENTRIES per user)
+                # Clean old entries
                 cursor.execute('''
                     DELETE FROM user_history 
                     WHERE user_id = ? AND recipient_id IN (
@@ -162,6 +164,38 @@ class UserHistoryManager:
             logger.error(f"Error getting user history: {e}")
             return []
     
+    def get_all_user_ids(self):
+        """Get all user IDs in database"""
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT DISTINCT user_id FROM user_history')
+            results = cursor.fetchall()
+            conn.close()
+            
+            return [row[0] for row in results]
+            
+        except Exception as e:
+            logger.error(f"Error getting user IDs: {e}")
+            return []
+    
+    def get_total_history_count(self):
+        """Get total number of history entries"""
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT COUNT(*) FROM user_history')
+            result = cursor.fetchone()
+            conn.close()
+            
+            return result[0] if result else 0
+            
+        except Exception as e:
+            logger.error(f"Error getting history count: {e}")
+            return 0
+    
     def clear_user_history(self, user_id):
         """Clear all history for a user"""
         try:
@@ -192,10 +226,10 @@ class MessageManager:
         """Add a new whisper message"""
         try:
             with self.lock:
+                expires_at = datetime.now() + timedelta(hours=MESSAGE_TTL_HOURS)
+                
                 conn = sqlite3.connect(DB_FILE)
                 cursor = conn.cursor()
-                
-                expires_at = datetime.now() + timedelta(hours=MESSAGE_TTL_HOURS)
                 
                 cursor.execute('''
                     INSERT INTO messages 
@@ -238,6 +272,22 @@ class MessageManager:
         except Exception as e:
             logger.error(f"Error getting message: {e}")
             return None
+    
+    def get_message_count(self):
+        """Get total message count"""
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT COUNT(*) FROM messages')
+            result = cursor.fetchone()
+            conn.close()
+            
+            return result[0] if result else 0
+            
+        except Exception as e:
+            logger.error(f"Error getting message count: {e}")
+            return 0
     
     def cleanup_expired(self):
         """Clean up expired messages"""
