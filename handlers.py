@@ -1,797 +1,535 @@
 # handlers.py
 import logging
+import asyncio
 from datetime import datetime
+from typing import Optional, Dict, Any
 
 from telethon import events, Button
-from telethon.errors import UsernameNotOccupiedError, UsernameInvalidError
-
-from config import WELCOME_TEXT, HELP_TEXT, SUPPORT_CHANNEL, SUPPORT_GROUP, ADMIN_ID
-from database import (
-    user_whisper_history, user_recent_recipients, messages_db,
-    add_to_whisper_history, get_user_stats, clear_user_history, clear_user_recent_only
-)
-from utils import (
-    is_cooldown, extract_target_from_text, get_user_entity,
-    get_all_past_recipients_buttons
+from telethon.tl.types import User
+from telethon.errors import (
+    UsernameNotOccupiedError,
+    UsernameInvalidError,
+    FloodWaitError
 )
 
-logger = logging.getLogger(__name__)
+from config import logger, ADMIN_ID, SUPPORT_CHANNEL, SUPPORT_GROUP
+from database import history_manager, message_manager, cache_manager
+from detection import detector
+from utils import get_user_entity, is_cooldown
 
-def setup_handlers(bot):
-    """Setup all bot event handlers"""
-    
-    @bot.on(events.NewMessage(pattern='/start'))
-    async def start_handler(event):
-        try:
-            user_id = event.sender_id
-            logger.info(f"🚀 Start command from user: {user_id}")
-            
-            # Get user stats
-            stats = get_user_stats(user_id)
-            
-            # Create personalized welcome message
-            if stats['total_whispers'] > 0:
-                stats_text = f"""
-    📊 **Your Whisper Stats:**
-    • Total Whispers: {stats['total_whispers']}
-    • Unique Recipients: {stats['unique_recipients']}
-    • Recent Whispers (7 days): {stats['recent_whispers']}
-    • Recent Recipients: {stats['recent_recipients_count']}
-                """
-            else:
-                stats_text = "📊 **No whispers yet!**\nSend your first whisper to see stats here."
-            
-            welcome_text = WELCOME_TEXT.format(stats=stats_text)
-            
-            buttons = [
-                [Button.url("📢 Channel", f"https://t.me/{SUPPORT_CHANNEL}")],
-                [Button.url("👥 Group", f"https://t.me/{SUPPORT_GROUP}")],
-                [Button.switch_inline("🚀 Send Whisper", query="")],
-                [Button.inline("📖 Help", data="help"), Button.inline("📜 History", data="view_full_history")],
-                [Button.inline("📊 My Stats", data="my_stats"), Button.inline("🕒 Recent", data="view_recent")]
-            ]
-            
-            if user_id == ADMIN_ID:
-                buttons.append([Button.inline("👑 Admin Stats", data="admin_stats")])
-            
-            await event.reply(welcome_text, buttons=buttons)
-            
-        except Exception as e:
-            logger.error(f"Start error: {e}")
-            await event.reply("❌ An error occurred. Please try again.")
+# ======================
+# GLOBAL BOT INSTANCE
+# ======================
+bot = None
 
-    @bot.on(events.NewMessage(pattern='/help'))
-    async def help_handler(event):
-        try:
-            bot_username = (await bot.get_me()).username
-            help_text = HELP_TEXT.format(bot_username, bot_username, bot_username)
-            
-            await event.reply(
-                help_text,
-                buttons=[
-                    [Button.switch_inline("🚀 Try Now", query="")],
-                    [Button.inline("🔙 Back", data="back_start")]
-                ]
-            )
-        except Exception as e:
-            logger.error(f"Help error: {e}")
-            await event.reply("❌ An error occurred. Please try again.")
-
-    @bot.on(events.NewMessage(pattern='/history'))
-    async def history_handler(event):
-        """Show user's complete whisper history"""
-        try:
-            user_id = event.sender_id
-            
-            if user_id not in user_recent_recipients or not user_recent_recipients[user_id]:
-                await event.reply(
-                    "📭 **No whisper history yet!**\n\n"
-                    "Send your first whisper and bot will remember ALL recipients.",
-                    buttons=[[Button.switch_inline("🚀 Send First Whisper", query="")]]
-                )
-                return
-            
-            # Get ALL unique recipients
-            history_text = "📚 **ALL Your Past Recipients**\n\n"
-            
-            for i, recipient in enumerate(user_recent_recipients[user_id], 1):
-                name = recipient.get('name', 'User')
-                username = recipient.get('username')
-                count = recipient.get('count', 1)
-                last_time = datetime.fromisoformat(recipient['timestamp']).strftime("%d/%m %H:%M")
-                
-                if username:
-                    history_text += f"{i}. **{name}** (@{username}) - {count} whispers, Last: {last_time}\n"
-                else:
-                    history_text += f"{i}. **{name}** - {count} whispers, Last: {last_time}\n"
-            
-            total = len(user_recent_recipients[user_id])
-            total_whispers = sum(r.get('count', 1) for r in user_recent_recipients[user_id])
-            
-            history_text += f"\n📊 **Stats:** {total} unique recipients, {total_whispers} total whispers"
-            
-            # Create quick action buttons from ALL recipients
-            buttons = []
-            for recipient in user_recent_recipients[user_id][:6]:
-                name = recipient.get('name', 'User')
-                username = recipient.get('username')
-                
-                if username:
-                    display = f"🔤 @{username}"
-                    query = f" @{username}"
-                else:
-                    display = f"👤 {name}"
-                    query = f" {recipient['id']}"
-                
-                buttons.append([
-                    Button.switch_inline(
-                        display[:20],
-                        query=query,
-                        same_peer=True
-                    )
-                ])
-            
-            buttons.append([
-                Button.inline("🔄 Refresh", data="view_full_history"),
-                Button.inline("🗑️ Clear", data="clear_history_confirm")
-            ])
-            
-            await event.reply(history_text, buttons=buttons)
-            
-        except Exception as e:
-            logger.error(f"History error: {e}")
-            await event.reply("❌ Error loading history.")
-
-    @bot.on(events.NewMessage(pattern='/recent'))
-    async def recent_handler(event):
-        """Show recent recipients"""
-        try:
-            user_id = event.sender_id
-            
-            if user_id not in user_recent_recipients or not user_recent_recipients[user_id]:
-                await event.reply(
-                    "🕒 **No recent recipients!**\n\n"
-                    "Send a whisper first to build your recent list.",
-                    buttons=[[Button.switch_inline("🚀 Send First Whisper", query="")]]
-                )
-                return
-            
-            recent_text = "🕒 **Your Recent Recipients**\n\n"
-            
-            for i, recipient in enumerate(user_recent_recipients[user_id][:15], 1):
-                name = recipient.get('name', 'User')
-                username = recipient.get('username')
-                timestamp = datetime.fromisoformat(recipient['timestamp']).strftime("%d/%m %H:%M")
-                
-                if username:
-                    recent_text += f"{i}. **{name}** (@{username}) - {timestamp}\n"
-                else:
-                    recent_text += f"{i}. **{name}** - {timestamp}\n"
-            
-            recent_text += f"\n📊 **Total Recent:** {len(user_recent_recipients[user_id])}"
-            
-            # Create quick selection buttons
-            buttons = []
-            for recipient in user_recent_recipients[user_id][:6]:
-                name = recipient.get('name', 'User')
-                username = recipient.get('username')
-                
-                if username:
-                    display = f"🔤 @{username}"
-                    query = f" @{username}"
-                else:
-                    display = f"👤 {name}"
-                    query = f" {recipient['id']}"
-                
-                if len(display) > 20:
-                    display = display[:17] + "..."
-                
-                buttons.append([
-                    Button.switch_inline(
-                        display,
-                        query=query,
-                        same_peer=True
-                    )
-                ])
-            
-            buttons.append([
-                Button.inline("📚 Full History", data="view_full_history"),
-                Button.inline("🔙 Back", data="back_start")
-            ])
-            
-            await event.reply(recent_text, buttons=buttons)
-            
-        except Exception as e:
-            logger.error(f"Recent error: {e}")
-            await event.reply("❌ Error loading recent recipients.")
-
-    @bot.on(events.NewMessage(pattern='/stats'))
-    async def stats_handler(event):
-        """Show user's personal statistics"""
-        try:
-            user_id = event.sender_id
-            stats = get_user_stats(user_id)
-            
-            stats_text = f"""
-    📊 **Your Personal Whisper Statistics**
-
-    • **Total Whispers Sent:** {stats['total_whispers']}
-    • **Unique Recipients:** {stats['unique_recipients']}
-    • **Recent Whispers (7 days):** {stats['recent_whispers']}
-    • **Recent Recipients Saved:** {stats['recent_recipients_count']}
-
-    📅 **Account Created:** Not tracked
-    🆔 **Your User ID:** `{user_id}`
-    ⏰ **Last Updated:** {datetime.now().strftime("%Y-%m-%d %H:%M")}
-            """
-            
-            buttons = [
-                [Button.switch_inline("💌 Send Whisper", query="")],
-                [Button.inline("📚 View History", data="view_full_history")],
-                [Button.inline("🕒 Recent Recipients", data="view_recent")],
-                [Button.inline("🔙 Back", data="back_start")]
-            ]
-            
-            await event.reply(stats_text, buttons=buttons)
-            
-        except Exception as e:
-            logger.error(f"Stats error: {e}")
-            await event.reply("❌ Error loading statistics.")
-
-    @bot.on(events.NewMessage(pattern='/clear'))
-    async def clear_handler(event):
-        """Clear user's history"""
-        try:
-            user_id = event.sender_id
-            
-            buttons = [
-                [Button.inline("🗑️ Clear ALL History", data="clear_all_history")],
-                [Button.inline("🕒 Clear Recent Only", data="clear_recent_only")],
-                [Button.inline("❌ Cancel", data="back_start")]
-            ]
-            
-            await event.reply(
-                "⚠️ **Clear History**\n\n"
-                "What would you like to clear?\n\n"
-                "• **Clear ALL History:** Removes all whispers and recipients\n"
-                "• **Clear Recent Only:** Keeps history but clears recent list\n\n"
-                "⚠️ **Warning:** This action cannot be undone!",
-                buttons=buttons
-            )
-            
-        except Exception as e:
-            logger.error(f"Clear error: {e}")
-            await event.reply("❌ Error in clear command.")
-
-    @bot.on(events.InlineQuery)
-    async def inline_handler(event):
-        """Handle inline queries with ALL past recipients"""
-        try:
-            if is_cooldown(event.sender_id):
-                await event.answer([])
-                return
-
-            user_id = event.sender_id
-            query_text = event.text.strip() if event.text else ""
-            
-            # सबसे पहले ALL past recipients के buttons get करें
-            all_past_buttons = get_all_past_recipients_buttons(user_id, query_text)
-            
-            # Case 1: Empty query - Show ALL past recipients with stats
-            if not query_text:
-                if all_past_buttons:
-                    # User has history - show ALL past recipients
-                    result_text = f"""
-    🤫 **Whisper Bot - Your Past Recipients**
-
-    📚 **Bot remembers ALL users you've whispered to!**
-    • Total unique recipients: {len(user_recent_recipients.get(user_id, []))}
-    • Click any below to whisper again
-    • Or type new message with @username/userID
-
-    💡 **How to use:**
-    1. Select from your past recipients below
-    2. OR type: `message @username`
-    3. OR type: `message 123456789`
-
-    ✨ **All your past whispers are saved!**
-                    """
-                else:
-                    # New user
-                    result_text = """
-    🤫 **Whisper Bot - Send Secret Messages**
-
-    💡 **How to send:**
-    1. Type your message below
-    2. Add @username OR user ID
-    3. Send!
-
-    📚 **Bot will remember ALL your future recipients!**
-                    """
-                
-                result = event.builder.article(
-                    title="🤫 All Your Past Recipients",
-                    description=f"{len(all_past_buttons)} past recipients",
-                    text=result_text,
-                    buttons=all_past_buttons or [[Button.switch_inline("🚀 Try Now", query="")]]
-                )
-                await event.answer([result])
-                return
-            
-            # Case 2: Query has content - Try to detect target
-            target_user, message_text, target_type = extract_target_from_text(query_text)
-            
-            # Case 2A: Target detected in query
-            if target_user and target_type:
-                try:
-                    if target_type == 'userid':
-                        if not target_user.isdigit() or len(target_user) < 8:
-                            raise ValueError("Invalid user ID")
-                        
-                        user_obj = await get_user_entity(bot, int(target_user))
-                        target_user_id = int(target_user)
-                        target_username = getattr(user_obj, 'username', None)
-                        target_name = getattr(user_obj, 'first_name', f'User {target_user}')
-                        
-                    else:
-                        username = target_user.lower().replace('@', '')
-                        
-                        if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]{3,30}$', username):
-                            raise UsernameInvalidError("Invalid username")
-                        
-                        user_obj = await get_user_entity(bot, username)
-                        target_user_id = user_obj.id
-                        target_username = username
-                        target_name = getattr(user_obj, 'first_name', f'@{username}')
-                    
-                    # Validate message
-                    if not message_text:
-                        result = event.builder.article(
-                            title="❌ Empty Message",
-                            description="Please enter a message",
-                            text="**Message is empty!**\n\nPlease type your secret message.\n\nSelect from your history below:",
-                            buttons=all_past_buttons[:3]
-                        )
-                        await event.answer([result])
-                        return
-                    
-                    # Add to whisper history
-                    whisper_data = {
-                        'recipient_id': target_user_id,
-                        'recipient_name': target_name,
-                        'recipient_username': target_username,
-                        'message': message_text
-                    }
-                    add_to_whisper_history(user_id, whisper_data)
-                    
-                    # Create message entry
-                    message_id = f'msg_{user_id}_{target_user_id}_{int(datetime.now().timestamp())}'
-                    messages_db[message_id] = {
-                        'user_id': target_user_id,
-                        'msg': message_text,
-                        'sender_id': user_id,
-                        'timestamp': datetime.now().isoformat(),
-                        'target_name': target_name,
-                        'target_username': target_username,
-                        'added_to_history': True
-                    }
-                    
-                    # Create result
-                    result_text = f"""
-    **🔐 Secret message for {target_name}!**
-
-    💬 **Message:** {message_text[:50]}{'...' if len(message_text) > 50 else ''}
-
-    ✅ **Added to your whisper history!**
-    📚 Bot will remember this recipient for future whispers.
-
-    🔒 **Only {target_name} can open this message.**
-                    """
-                    
-                    # Combine buttons
-                    combined_buttons = [
-                        [Button.inline("🔓 Send Secret Message", message_id)],
-                        *all_past_buttons[:2]
-                    ]
-                    
-                    result = event.builder.article(
-                        title=f"🤫 To {target_name}",
-                        description=f"Click to send to {target_name}",
-                        text=result_text,
-                        buttons=combined_buttons
-                    )
-                    
-                    await event.answer([result])
-                    return
-                    
-                except (UsernameNotOccupiedError, UsernameInvalidError):
-                    error_text = f"""
-    ❌ **User @{target_user} not found!**
-
-    💡 **Try these:**
-    1. Check username spelling
-    2. Use user ID instead
-    3. Select from your history below
-                    """
-                    result = event.builder.article(
-                        title=f"❌ @{target_user} not found",
-                        description="User doesn't exist",
-                        text=error_text,
-                        buttons=all_past_buttons[:3]
-                    )
-                    await event.answer([result])
-                    return
-                    
-                except Exception as e:
-                    logger.error(f"Error processing detected target: {e}")
-            
-            # Case 2B: Auto-suggest from recent
-            if user_id in user_recent_recipients and user_recent_recipients[user_id]:
-                recent_recipient = user_recent_recipients[user_id][0]
-                target_user_id = recent_recipient['id']
-                target_username = recent_recipient.get('username')
-                target_name = recent_recipient.get('name', 'User')
-                
-                # Add to whisper history
-                whisper_data = {
-                    'recipient_id': target_user_id,
-                    'recipient_name': target_name,
-                    'recipient_username': target_username,
-                    'message': query_text
-                }
-                add_to_whisper_history(user_id, whisper_data)
-                
-                # Create message entry
-                message_id = f'msg_{user_id}_{target_user_id}_{int(datetime.now().timestamp())}'
-                messages_db[message_id] = {
-                    'user_id': target_user_id,
-                    'msg': query_text,
-                    'sender_id': user_id,
-                    'timestamp': datetime.now().isoformat(),
-                    'target_name': target_name,
-                    'target_username': target_username,
-                    'auto_suggested': True
-                }
-                
-                # Create result
-                result_text = f"""
-    **✨ Auto-Suggest Active!**
-
-    💬 **Message:** {query_text[:50]}{'...' if len(query_text) > 50 else ''}
-
-    👤 **To:** {target_name} (Most Recent)
-
-    ✅ **Added to your whisper history!**
-
-    🔒 **Only {target_name} can open this message.**
-                """
-                
-                combined_buttons = [
-                    [Button.inline("🔓 Send Secret Message", message_id)],
-                    *all_past_buttons[:2]
-                ]
-                
-                result = event.builder.article(
-                    title=f"🤫 Auto to {target_name}",
-                    description=f"Auto-send to {target_name}",
-                    text=result_text,
-                    buttons=combined_buttons
-                )
-                
-                await event.answer([result])
-                return
-            
-            # Case 2C: No target detected - Show ALL history suggestions
-            suggestion_text = """
-    **💡 Need to specify a recipient!**
-
-    Bot couldn't detect a username or user ID in your message.
-
-    **Try these formats:**
-    1. `your message @username`
-    2. `your message 123456789`
-    3. `to @username: your message`
-
-    **Or select from your COMPLETE whisper history below:**
-    📚 **All your past recipients will appear here!**
-            """
-            
-            result = event.builder.article(
-                title="❌ Specify a recipient",
-                description="Add @username or user ID",
-                text=suggestion_text,
-                buttons=all_past_buttons[:5] or [
-                    [Button.switch_inline("🔄 Try Again", query=query_text)]
-                ]
-            )
-            
-            await event.answer([result])
-            
-        except Exception as e:
-            logger.error(f"Inline query error: {e}")
-            result = event.builder.article(
-                title="❌ Error",
-                description="Something went wrong",
-                text="❌ An error occurred. Please try again in a moment."
-            )
-            await event.answer([result])
-
-    @bot.on(events.CallbackQuery)
-    async def callback_handler(event):
-        try:
-            data = event.data.decode('utf-8')
-            user_id = event.sender_id
-            
-            if data == "help":
-                bot_username = (await bot.get_me()).username
-                help_text = HELP_TEXT.format(bot_username, bot_username, bot_username)
-                
-                await event.edit(
-                    help_text,
-                    buttons=[
-                        [Button.switch_inline("🚀 Try Now", query="")],
-                        [Button.inline("🔙 Back", data="back_start")]
-                    ]
-                )
-            
-            elif data == "view_full_history":
-                if user_id not in user_recent_recipients or not user_recent_recipients[user_id]:
-                    await event.answer("No history!", alert=True)
-                    await event.edit(
-                        "📭 No whisper history yet!",
-                        buttons=[[Button.switch_inline("🚀 Send Whisper", query="")]]
-                    )
-                    return
-                
-                # Show ALL recipients with quick buttons
-                history_text = f"""
-    📚 **ALL Your Past Recipients**
-
-    Total: {len(user_recent_recipients[user_id])} unique recipients
-
-    💡 **Click any below to whisper again!**
-    Bot remembers ALL users you've ever whispered to.
-                """
-                
-                # Get buttons for ALL recipients
-                all_buttons = get_all_past_recipients_buttons(user_id, "")
-                
-                if all_buttons:
-                    await event.edit(history_text, buttons=all_buttons[:10])
-                else:
-                    await event.edit(history_text, buttons=[[Button.switch_inline("🚀 Send Whisper", query="")]])
-            
-            elif data == "view_recent":
-                if user_id not in user_recent_recipients or not user_recent_recipients[user_id]:
-                    await event.answer("No recent recipients!", alert=True)
-                    await event.edit(
-                        "🕒 No recent recipients! Send a whisper first.",
-                        buttons=[[Button.switch_inline("🚀 Send Whisper", query="")]]
-                    )
-                    return
-                
-                recent_text = "🕒 **Your Recent Recipients**\n\n"
-                for i, recipient in enumerate(user_recent_recipients[user_id][:10], 1):
-                    name = recipient.get('name', 'User')
-                    username = recipient.get('username')
-                    if username:
-                        recent_text += f"{i}. **{name}** (@{username})\n"
-                    else:
-                        recent_text += f"{i}. **{name}**\n"
-                
-                recent_text += f"\nTotal: {len(user_recent_recipients[user_id])} recent recipients"
-                
-                # Create quick selection buttons
+# ======================
+# INLINE QUERY HANDLER
+# ======================
+async def handle_inline_query(event):
+    """Main inline query handler with instant detection"""
+    try:
+        user_id = event.sender_id
+        
+        # Check cooldown
+        if is_cooldown(user_id):
+            await event.answer([])
+            return
+        
+        query_text = event.text.strip() if event.text else ""
+        
+        # Get user's history
+        user_history = history_manager.get_user_history(user_id)
+        
+        # Case 1: Empty query - Show ALL past recipients
+        if not query_text:
+            if user_history:
+                # Create buttons for ALL past recipients
                 buttons = []
-                for recipient in user_recent_recipients[user_id][:6]:
-                    name = recipient.get('name', 'User')
+                for recipient in user_history[:10]:  # Show first 10
+                    name = recipient['name']
                     username = recipient.get('username')
                     
                     if username:
-                        display = f"🔤 @{username}"
-                        query = f" @{username}"
+                        display_text = f"@{username}"
+                        query_suffix = f" @{username}"
                     else:
-                        display = f"👤 {name}"
-                        query = f" {recipient['id']}"
+                        display_text = name
+                        query_suffix = f" {recipient['id']}"
                     
-                    if len(display) > 20:
-                        display = display[:17] + "..."
+                    # Truncate if too long
+                    if len(display_text) > 20:
+                        display_text = display_text[:17] + "..."
                     
                     buttons.append([
                         Button.switch_inline(
-                            display,
+                            display_text,
+                            query=query_suffix,
+                            same_peer=True
+                        )
+                    ])
+                
+                result_text = "📋 **Select from your past recipients or type a new message:**"
+                
+                result = event.builder.article(
+                    title="🤫 Your Past Recipients",
+                    description=f"{len(user_history)} recipients available",
+                    text=result_text,
+                    buttons=buttons
+                )
+                
+            else:
+                # New user - show basic help
+                result_text = """
+🤫 **Send a Secret Whisper**
+
+💡 **How to send:**
+1. Type your message
+2. Add @username OR user ID
+3. Send!
+
+📱 **Examples:**
+• `Hello! @username`
+• `How are you 123456789`
+• `Hi there @telegram_user`
+
+🔒 **Only they can read your message!**
+                """
+                
+                result = event.builder.article(
+                    title="🤫 Send Secret Message",
+                    description="Type: message @username",
+                    text=result_text,
+                    buttons=[[Button.switch_inline("🚀 Try Now", query="")]]
+                )
+            
+            await event.answer([result])
+            return
+        
+        # Case 2: Query has content - Detect recipient instantly
+        detection_result = detector.extract_recipient_and_message(query_text)
+        recipient, message_text, recipient_type = detection_result
+        
+        # If no recipient detected, show suggestions
+        if not recipient:
+            # Check if it's just a message (auto-suggest last recipient)
+            if user_history and query_text:
+                # Auto-suggest most recent recipient
+                recent_recipient = user_history[0]
+                return await create_whisper_result(
+                    event, user_id, recent_recipient['id'], 
+                    query_text, recent_recipient['name'], 
+                    recent_recipient.get('username'), True
+                )
+            
+            # Show history suggestions
+            if user_history:
+                suggestion_text = "💡 **Add a recipient:**\nType @username or user ID after your message"
+                buttons = []
+                
+                for recipient in user_history[:5]:
+                    name = recipient['name']
+                    username = recipient.get('username')
+                    
+                    if username:
+                        display = f"@{username}"
+                        query = f"{query_text} @{username}"
+                    else:
+                        display = name
+                        query = f"{query_text} {recipient['id']}"
+                    
+                    buttons.append([
+                        Button.switch_inline(
+                            f"✉️ {display}",
                             query=query,
                             same_peer=True
                         )
                     ])
                 
-                buttons.append([
-                    Button.inline("📚 Full History", data="view_full_history"),
-                    Button.inline("🔙 Back", data="back_start")
-                ])
-                
-                await event.edit(recent_text, buttons=buttons)
-            
-            elif data == "my_stats":
-                stats = get_user_stats(user_id)
-                
-                stats_text = f"""
-    📊 **Your Personal Statistics**
-
-    • **Total Whispers:** {stats['total_whispers']}
-    • **Unique Recipients:** {stats['unique_recipients']}
-    • **Recent Whispers (7 days):** {stats['recent_whispers']}
-    • **Recent Recipients:** {stats['recent_recipients_count']}
-
-    💡 **All your whispers are saved in history!**
-    Every recipient you've ever whispered to is remembered.
-                """
-                
-                await event.edit(
-                    stats_text,
-                    buttons=[
-                        [Button.switch_inline("💌 Send Whisper", query="")],
-                        [Button.inline("📚 View History", data="view_full_history")],
-                        [Button.inline("🔙 Back", data="back_start")]
-                    ]
+                result = event.builder.article(
+                    title="❌ Specify a recipient",
+                    description="Add @username or user ID",
+                    text=suggestion_text,
+                    buttons=buttons
                 )
-            
-            elif data == "clear_history_confirm":
-                await event.edit(
-                    "⚠️ **Clear History Confirmation**\n\n"
-                    "This will delete ALL your whisper history!\n"
-                    "📚 **All past recipients will be forgotten.**\n"
-                    "🕒 **Recent list will be cleared.**\n\n"
-                    "⚠️ **This action cannot be undone!**\n\n"
-                    "Are you sure you want to continue?",
-                    buttons=[
-                        [Button.inline("✅ Yes, Clear ALL", data="clear_all_history")],
-                        [Button.inline("🕒 Clear Recent Only", data="clear_recent_only")],
-                        [Button.inline("❌ Cancel", data="back_start")]
-                    ]
-                )
-            
-            elif data == "clear_all_history":
-                total_whispers, total_recent = clear_user_history(user_id)
                 
-                await event.answer(f"✅ Cleared {total_whispers} whispers!", alert=True)
-                await event.edit(
-                    f"✅ **History Cleared!**\n\n"
-                    f"• Deleted whispers: {total_whispers}\n"
-                    f"• Cleared recipients: {total_recent}\n\n"
-                    "📭 All your history has been removed.\n"
-                    "Send a new whisper to start fresh!",
-                    buttons=[[Button.switch_inline("🚀 Send New Whisper", query="")]]
-                )
+                await event.answer([result])
+                return
             
-            elif data == "clear_recent_only":
-                total_recent = clear_user_recent_only(user_id)
-                if total_recent > 0:
-                    await event.answer(f"✅ Cleared {total_recent} recent recipients!", alert=True)
-                    await event.edit(
-                        f"✅ **Recent List Cleared!**\n\n"
-                        f"Cleared {total_recent} recent recipients.\n"
-                        "📚 Your complete whisper history is still saved.\n"
-                        "Recent list will rebuild as you send new whispers.",
-                        buttons=[[Button.switch_inline("🚀 Send Whisper", query="")]]
-                    )
-                else:
-                    await event.answer("No recent recipients to clear!", alert=True)
+            # No history and no recipient
+            result = event.builder.article(
+                title="❌ Recipient required",
+                description="Add @username or user ID",
+                text="**Please specify a recipient!**\n\nExamples:\n• `Hello @username`\n• `Hi 123456789`",
+                buttons=[[Button.switch_inline("🔄 Try Again", query=query_text)]]
+            )
             
-            elif data == "admin_stats":
-                if user_id != ADMIN_ID:
-                    await event.answer("❌ Admin only!", alert=True)
-                    return
-                    
-                total_users = len(user_whisper_history)
-                total_messages = len(messages_db)
-                total_history_entries = sum(len(v) for v in user_whisper_history.values())
+            await event.answer([result])
+            return
+        
+        # Case 3: Recipient detected - Get user entity
+        try:
+            if recipient_type == 'userid':
+                # Validate user ID
+                user_id_int = int(''.join(filter(str.isdigit, recipient)))
+                user_obj = await get_user_entity(bot, user_id_int)
+                recipient_id = user_obj.id
+                recipient_username = getattr(user_obj, 'username', None)
+                recipient_name = getattr(user_obj, 'first_name', f'User {recipient_id}')
                 
-                from database import user_entity_cache
-                
-                stats_text = f"""
-    👑 **Admin Statistics**
+            else:  # username
+                username = recipient.lstrip('@').lower()
+                user_obj = await get_user_entity(bot, username)
+                recipient_id = user_obj.id
+                recipient_username = username
+                recipient_name = getattr(user_obj, 'first_name', f'@{username}')
+            
+            # If no message text, use query as message
+            if not message_text:
+                message_text = query_text
+            
+            # Create whisper result
+            return await create_whisper_result(
+                event, user_id, recipient_id, message_text,
+                recipient_name, recipient_username, False
+            )
+            
+        except (UsernameNotOccupiedError, UsernameInvalidError) as e:
+            logger.warning(f"User not found: {recipient}")
+            
+            error_text = f"""
+❌ **User not found!**
 
-    👥 Total Users: {total_users}
-    💬 Active Messages: {total_messages}
-    📚 Total History Entries: {total_history_entries}
-    🧠 Cached Users: {len(user_entity_cache)}
+**Tried:** `{recipient}`
+**Type:** {'Username' if recipient_type == 'username' else 'User ID'}
 
-    🆔 Admin ID: {ADMIN_ID}
-    🌐 Port: {PORT}
-    🕒 Time: {datetime.now().strftime('%H:%M:%S')}
-
-    **Status:** ✅ Running
-                """
-                
-                await event.edit(
-                    stats_text,
-                    buttons=[[Button.inline("🔙 Back", data="back_start")]]
-                )
+💡 **Try:**
+1. Check spelling
+2. Use user ID instead
+3. Make sure user exists
+            """
             
-            elif data == "back_start":
-                # Get updated stats
-                stats = get_user_stats(user_id)
-                
-                if stats['total_whispers'] > 0:
-                    stats_text = f"""
-    📊 **Your Stats:**
-    • Total Whispers: {stats['total_whispers']}
-    • Unique Recipients: {stats['unique_recipients']}
-    • Recent Whispers: {stats['recent_whispers']}
-                    """
-                else:
-                    stats_text = "📊 **No whispers yet!**"
-                
-                welcome_text = WELCOME_TEXT.format(stats=stats_text)
-                
-                buttons = [
-                    [Button.url("📢 Channel", f"https://t.me/{SUPPORT_CHANNEL}")],
-                    [Button.url("👥 Group", f"https://t.me/{SUPPORT_GROUP}")],
-                    [Button.switch_inline("🚀 Send Whisper", query="")],
-                    [Button.inline("📖 Help", data="help"), Button.inline("📜 History", data="view_full_history")],
-                    [Button.inline("📊 My Stats", data="my_stats"), Button.inline("🕒 Recent", data="view_recent")]
-                ]
-                
-                if user_id == ADMIN_ID:
-                    buttons.append([Button.inline("👑 Admin Stats", data="admin_stats")])
-                
-                await event.edit(welcome_text, buttons=buttons)
+            result = event.builder.article(
+                title=f"❌ {recipient} not found",
+                description="User doesn't exist",
+                text=error_text,
+                buttons=[[Button.switch_inline("🔄 Try Again", query=query_text)]]
+            )
             
-            elif data in messages_db:
-                msg_data = messages_db[data]
-                
-                if event.sender_id == msg_data['user_id']:
-                    # Target user viewing
-                    sender_info = ""
-                    try:
-                        sender_id = msg_data['sender_id']
-                        from database import user_entity_cache
-                        from utils import get_user_entity
-                        
-                        cache_key = str(sender_id)
-                        if cache_key in user_entity_cache:
-                            sender = user_entity_cache[cache_key]['entity']
-                        else:
-                            try:
-                                sender = await bot.get_entity(sender_id)
-                            except:
-                                sender = type('obj', (object,), {
-                                    'first_name': 'Someone',
-                                    'username': None
-                                })()
-                        
-                        sender_name = getattr(sender, 'first_name', 'Someone')
-                        sender_info = f"\n\n💌 From: {sender_name}"
-                        if hasattr(sender, 'username') and sender.username:
-                            sender_info += f" (@{sender.username})"
-                    except:
-                        sender_info = f"\n\n💌 From: Anonymous"
-                    
-                    alert_text = f"🔓 {msg_data['msg']}{sender_info}"
-                    if msg_data.get('added_to_history'):
-                        alert_text += "\n\n📚 This whisper was added to sender's history!"
-                    elif msg_data.get('auto_suggested'):
-                        alert_text += "\n\n✨ Sent using auto-suggest from history!"
-                    
-                    await event.answer(alert_text, alert=True)
-                
-                elif event.sender_id == msg_data['sender_id']:
-                    # Sender viewing
-                    alert_text = f"📝 Your message: {msg_data['msg']}\n\n👤 To: {msg_data.get('target_name', 'User')}"
-                    if msg_data.get('target_username'):
-                        alert_text += f" (@{msg_data['target_username']})"
-                    
-                    alert_text += f"\n\n✅ Added to your whisper history!"
-                    
-                    await event.answer(alert_text, alert=True)
-                
-                else:
-                    await event.answer("🔒 This message is not for you!", alert=True)
+            await event.answer([result])
+            return
             
-            else:
-                await event.answer("❌ Invalid button!", alert=True)
-                
         except Exception as e:
-            logger.error(f"Callback error: {e}")
-            await event.answer("❌ An error occurred. Please try again.", alert=True)
+            logger.error(f"Error processing recipient {recipient}: {e}")
+            
+            result = event.builder.article(
+                title="❌ Error",
+                description="Something went wrong",
+                text="❌ An error occurred. Please try again.",
+                buttons=[[Button.switch_inline("🔄 Try Again", query=query_text)]]
+            )
+            
+            await event.answer([result])
+            return
+    
+    except Exception as e:
+        logger.error(f"Inline query error: {e}")
+        
+        result = event.builder.article(
+            title="❌ Error",
+            description="Something went wrong",
+            text="❌ An error occurred. Please try again.",
+            buttons=[[Button.switch_inline("🔄 Try Again", query="")]]
+        )
+        
+        await event.answer([result])
+
+async def create_whisper_result(event, sender_id, recipient_id, message_text, 
+                               recipient_name, recipient_username=None, auto_suggested=False):
+    """Create and return a whisper result"""
+    try:
+        # Add to history
+        history_manager.add_recipient(
+            sender_id, recipient_id, recipient_name, recipient_username
+        )
+        
+        # Cache user info
+        if recipient_username:
+            cache_manager.cache_user(
+                f"@{recipient_username}", recipient_id,
+                recipient_username, recipient_name, None
+            )
+        
+        cache_manager.cache_user(
+            str(recipient_id), recipient_id,
+            recipient_username, recipient_name, None
+        )
+        
+        # Create message ID
+        message_id = f"msg_{sender_id}_{recipient_id}_{int(datetime.now().timestamp())}"
+        
+        # Save message
+        message_manager.add_message(
+            message_id, sender_id, recipient_id, message_text
+        )
+        
+        # Create result text
+        if auto_suggested:
+            title = f"🤫 Auto to {recipient_name}"
+            description = f"Auto-send to {recipient_name}"
+            result_text = f"**✨ Auto-suggest active!**\n\n"
+        else:
+            title = f"🤫 To {recipient_name}"
+            description = f"Send to {recipient_name}"
+            result_text = f"**🔐 Secret message for {recipient_name}**\n\n"
+        
+        if recipient_username:
+            result_text += f"**Recipient:** @{recipient_username}\n"
+        else:
+            result_text += f"**Recipient:** {recipient_name}\n"
+        
+        result_text += f"**Message:** {message_text[:100]}{'...' if len(message_text) > 100 else ''}\n\n"
+        result_text += f"🔒 **Only {recipient_name} can read this!**"
+        
+        # Create result
+        result = event.builder.article(
+            title=title,
+            description=description,
+            text=result_text,
+            buttons=[[Button.inline("🔓 Show Message", message_id)]]
+        )
+        
+        await event.answer([result])
+        
+    except Exception as e:
+        logger.error(f"Error creating whisper result: {e}")
+        raise
+
+# ======================
+# CALLBACK QUERY HANDLER
+# ======================
+async def handle_callback_query(event):
+    """Handle button clicks on whisper messages"""
+    try:
+        data = event.data.decode('utf-8')
+        
+        # Check if it's a message ID
+        if data.startswith('msg_'):
+            message_data = message_manager.get_message(data)
+            
+            if not message_data:
+                await event.answer("❌ Message expired or not found!", alert=True)
+                return
+            
+            sender_id = message_data['sender_id']
+            recipient_id = message_data['recipient_id']
+            message_text = message_data['message']
+            
+            # Check who is viewing
+            viewer_id = event.sender_id
+            
+            if viewer_id == recipient_id:
+                # Recipient viewing - show message with sender info
+                try:
+                    sender_info = await get_user_entity(bot, sender_id)
+                    sender_name = getattr(sender_info, 'first_name', 'Someone')
+                    sender_username = getattr(sender_info, 'username', None)
+                    
+                    sender_text = f"\n\n💌 **From:** {sender_name}"
+                    if sender_username:
+                        sender_text += f" (@{sender_username})"
+                    
+                    await event.answer(f"🔓 {message_text}{sender_text}", alert=True)
+                    
+                except Exception:
+                    await event.answer(f"🔓 {message_text}\n\n💌 **From:** Anonymous", alert=True)
+                    
+            elif viewer_id == sender_id:
+                # Sender viewing their own message
+                try:
+                    recipient_info = await get_user_entity(bot, recipient_id)
+                    recipient_name = getattr(recipient_info, 'first_name', 'User')
+                    
+                    await event.answer(
+                        f"📝 **Your message:** {message_text}\n\n"
+                        f"👤 **To:** {recipient_name}",
+                        alert=True
+                    )
+                    
+                except Exception:
+                    await event.answer(
+                        f"📝 **Your message:** {message_text}\n\n"
+                        f"👤 **To:** User {recipient_id}",
+                        alert=True
+                    )
+                    
+            else:
+                # Someone else trying to view
+                await event.answer("🔒 This message is not for you!", alert=True)
+                
+        else:
+            await event.answer("❌ Invalid button!", alert=True)
+            
+    except Exception as e:
+        logger.error(f"Callback error: {e}")
+        await event.answer("❌ An error occurred!", alert=True)
+
+# ======================
+# COMMAND HANDLERS
+# ======================
+async def handle_start_command(event):
+    """Handle /start command"""
+    try:
+        user_id = event.sender_id
+        
+        # Get user history stats
+        user_history = history_manager.get_user_history(user_id)
+        history_count = len(user_history)
+        
+        welcome_text = f"""
+🤫 **Instant Whisper Bot**
+
+🔒 Send anonymous secret messages
+🚀 Only recipient can read
+🎯 Instant user detection
+
+📊 **Your stats:**
+• Past recipients: {history_count}
+• Last used: {datetime.now().strftime('%Y-%m-%d')}
+
+💡 **How to use:**
+Type `@{bot.get_me().username}` in any chat
+        """
+        
+        buttons = [
+            [Button.url("📢 Channel", f"https://t.me/{SUPPORT_CHANNEL}")],
+            [Button.url("👥 Group", f"https://t.me/{SUPPORT_GROUP}")],
+            [Button.switch_inline("🚀 Send Whisper", query="")],
+        ]
+        
+        if user_id == ADMIN_ID:
+            buttons.append([Button.inline("📊 Admin Stats", "admin_stats")])
+        
+        await event.reply(welcome_text, buttons=buttons)
+        
+    except Exception as e:
+        logger.error(f"Start command error: {e}")
+        await event.reply("❌ Error occurred!")
+
+async def handle_history_command(event):
+    """Handle /history command"""
+    try:
+        user_id = event.sender_id
+        user_history = history_manager.get_user_history(user_id)
+        
+        if not user_history:
+            await event.reply(
+                "📭 **No whisper history yet!**\n\n"
+                "Send your first whisper to build history.",
+                buttons=[[Button.switch_inline("🚀 Send Whisper", query="")]]
+            )
+            return
+        
+        history_text = "📚 **Your Past Recipients**\n\n"
+        
+        for i, recipient in enumerate(user_history[:15], 1):
+            name = recipient['name']
+            username = recipient.get('username')
+            count = recipient.get('count', 1)
+            
+            if username:
+                history_text += f"{i}. **{name}** (@{username}) - {count} whispers\n"
+            else:
+                history_text += f"{i}. **{name}** - {count} whispers\n"
+        
+        total_whispers = sum(r.get('count', 1) for r in user_history)
+        history_text += f"\n📊 **Total:** {len(user_history)} recipients, {total_whispers} whispers"
+        
+        # Create quick buttons
+        buttons = []
+        for recipient in user_history[:6]:
+            name = recipient['name']
+            username = recipient.get('username')
+            
+            if username:
+                display = f"🔤 @{username}"
+                query = f" @{username}"
+            else:
+                display = f"👤 {name}"
+                query = f" {recipient['id']}"
+            
+            buttons.append([
+                Button.switch_inline(
+                    display[:20],
+                    query=query,
+                    same_peer=True
+                )
+            ])
+        
+        buttons.append([Button.inline("🗑️ Clear History", "clear_history")])
+        
+        await event.reply(history_text, buttons=buttons)
+        
+    except Exception as e:
+        logger.error(f"History command error: {e}")
+        await event.reply("❌ Error loading history!")
+
+async def handle_clear_command(event):
+    """Handle /clear command"""
+    try:
+        user_id = event.sender_id
+        
+        if history_manager.clear_user_history(user_id):
+            await event.reply(
+                "✅ **History cleared!**\n\n"
+                "All your past recipients have been removed.",
+                buttons=[[Button.switch_inline("🚀 Send New Whisper", query="")]]
+            )
+        else:
+            await event.reply("❌ Error clearing history!")
+            
+    except Exception as e:
+        logger.error(f"Clear command error: {e}")
+        await event.reply("❌ Error occurred!")
+
+# ======================
+# SETUP HANDLERS
+# ======================
+def setup_handlers(bot_instance):
+    """Setup all event handlers"""
+    global bot
+    bot = bot_instance
+    
+    # Inline query handler
+    @bot.on(events.InlineQuery)
+    async def inline_handler_wrapper(event):
+        await handle_inline_query(event)
+    
+    # Callback query handler
+    @bot.on(events.CallbackQuery)
+    async def callback_handler_wrapper(event):
+        await handle_callback_query(event)
+    
+    # Command handlers
+    @bot.on(events.NewMessage(pattern='/start'))
+    async def start_handler_wrapper(event):
+        await handle_start_command(event)
+    
+    @bot.on(events.NewMessage(pattern='/history'))
+    async def history_handler_wrapper(event):
+        await handle_history_command(event)
+    
+    @bot.on(events.NewMessage(pattern='/clear'))
+    async def clear_handler_wrapper(event):
+        await handle_clear_command(event)
+    
+    @bot.on(events.NewMessage(pattern='/stats'))
+    async def stats_handler_wrapper(event):
+        if event.sender_id == ADMIN_ID:
+            total_users = len(set(
+                uid for uid in history_manager.get_all_user_ids()
+            ))
+            await event.reply(f"📊 **Admin Stats:**\n• Total users: {total_users}")
+        else:
+            await event.reply("❌ Admin only!")
+    
+    logger.info("✅ Handlers setup complete")
