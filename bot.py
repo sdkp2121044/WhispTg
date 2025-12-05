@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+import sys
 from datetime import datetime
 from flask import Flask, jsonify
 from telethon import TelegramClient, events, Button
@@ -38,7 +39,8 @@ except Exception as e:
 # Initialize handlers
 whisper_handler = WhisperHandler(bot)
 user_manager = UserManager()
-callback_handler = CallbackHandler(bot, user_manager)
+# Rename this variable to avoid conflict
+callback_handler_obj = CallbackHandler(bot, user_manager)
 
 # Load data
 user_manager.load_data()
@@ -122,10 +124,10 @@ Last 10 users will be shown for quick sending.
 async def inline_handler(event):
     await whisper_handler.handle_inline_query(event)
 
-# Register callback handler
+# Register callback handler - FIXED: Use callback_handler_obj
 @bot.on(events.CallbackQuery)
 async def callback_handler(event):
-    await callback_handler.handle_callback(event)
+    await callback_handler_obj.handle_callback(event)
 
 # Flask routes for Render health checks
 @app.route('/')
@@ -198,12 +200,6 @@ def run_bot():
         user_manager.save_data()
 
 if __name__ == '__main__':
-    # For Render, we need to handle both web and worker
-    import sys
-    
-    if len(sys.argv) > 1 and sys.argv[1] == 'web':
-        # Run as web service
-        run_flask()
-    else:
-        # Run as worker (bot)
-        run_bot()
+    # For Render, check if we should run web or bot
+    # Render के लिए सिर्फ bot चलाएं, Flask अलग process में चलेगा
+    run_bot()
