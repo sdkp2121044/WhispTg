@@ -1,16 +1,19 @@
 services:
-  - type: worker
+  - type: web
     name: shribots-whisper-bot
     env: python
-    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     envVars:
       - key: API_ID
-        value: "25136703"
+        sync: false
       - key: API_HASH
-        value: "accfaf5ecd981c67e481328515c39f89"
+        sync: false
       - key: BOT_TOKEN
-        value: "8314503581:AAEm5TvIs_-qn23VfOCnfVL1dTRwwDtpi8A"
+        sync: false
       - key: ADMIN_ID
-        value: "8385462088"
+        sync: false
+      - key: PORT
+        value: 10000
+    healthCheckPath: /health
+    autoDeploy: true
