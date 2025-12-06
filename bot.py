@@ -4,9 +4,8 @@ import re
 import asyncio
 import json
 from datetime import datetime
-import threading
+from flask import Flask, render_template_string
 from telethon import TelegramClient, events, Button
-from telethon.tl.types import User as TelethonUser
 
 # Configure logging
 logging.basicConfig(
@@ -17,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 # Environment variables
 API_ID = int(os.getenv('API_ID', ''))
-API_HASH = os.getenv('API_HASH', '')
-BOT_TOKEN = os.getenv('BOT_TOKEN', '')
+API_HASH = os.getenv('API_HASH', ''))
+BOT_TOKEN = os.getenv('BOT_TOKEN', ''))
 ADMIN_ID = int(os.getenv('ADMIN_ID', ''))
 OWNER_ID = ADMIN_ID  # Shri button owner ID
 PORT = int(os.environ.get('PORT', 10000))
@@ -27,6 +26,9 @@ PORT = int(os.environ.get('PORT', 10000))
 SUPPORT_CHANNEL = "shribots"
 SUPPORT_GROUP = "idxhelp"
 MAIN_BOT_FOR_CLONE = "upspbot"
+
+# Initialize Flask app
+app = Flask(__name__)
 
 # Initialize bot
 try:
@@ -156,7 +158,7 @@ else:
     WELCOME_TEXT = """
 ╔══════════════════════╗
 ║     🎭 𝗖𝗟𝗢𝗡𝗘𝗗       ║ 𝐏𝐨𝐰𝐞𝐫𝐞𝐝 𝐛𝐲
-║    𝗪𝗛𝗜𝗦𝗣𝗘𝗑𝗕𝗢𝗧    ║      𝐒𝐡𝐫𝐢
+║    𝗪𝗛𝗜𝗦𝗣𝗘𝗥 𝗕𝗢𝗧    ║      𝐒𝐡𝐫𝐢
 ╚══════════════════════╝
 
 🤫 Welcome to your Whisper Bot!
@@ -422,6 +424,7 @@ async def stats_handler(event):
 👑 Owner ID: {OWNER_ID}
 🌐 Port: {PORT}
 🤖 Bot Type: {'MAIN' if IS_MAIN_BOT else 'CLONED'}
+🔗 Host: Render (Web Service)
 
 **Features Active:**
 ✅ Instant username detection
@@ -1215,7 +1218,7 @@ async def ping_handler(event):
     end = datetime.now()
     ping_time = (end - start).microseconds / 1000
     
-    await msg.edit(f"🏓 Pong! `{ping_time:.2f}ms`\n\n🤖 Bot: @{(await bot.get_me()).username}")
+    await msg.edit(f"🏓 Pong! `{ping_time:.2f}ms`\n\n🤖 Bot: @{(await bot.get_me()).username}\n🔗 Host: Render")
 
 # Clone commands only in main bot
 @bot.on(events.NewMessage(pattern='/clone'))
@@ -1480,70 +1483,436 @@ async def mybot_handler(event):
         ]
     )
 
-async def main():
+# Flask routes
+@app.route('/')
+def home():
+    bot_username = "bot_username"
+    bot_type = "MAIN" if IS_MAIN_BOT else "CLONED"
+    
     try:
-        me = await bot.get_me()
-        logger.info(f"🤖 Bot: @{me.username} ({'MAIN' if IS_MAIN_BOT else 'CLONED'})")
-        logger.info(f"👑 Owner ID: {OWNER_ID}")
-        logger.info(f"👤 Admin ID: {ADMIN_ID}")
-        logger.info(f"✅ Features Active:")
-        logger.info("   ⚡ Instant username detection")
-        logger.info("   ✅ गलत username/ID support")
-        logger.info("   🔄 Auto last user display")
-        logger.info("   🎯 One-step sending")
-        logger.info("   👑 Owner can read all whispers")
-        logger.info("   📢 Admin broadcast system")
-        if IS_MAIN_BOT:
-            logger.info("   🤖 Clone system active")
-        logger.info(f"📊 Recent Users: {len(recent_users)}")
-        logger.info(f"💬 Total Whispers: {len(all_whispers)}")
-        
-        print(f"\n{'='*50}")
-        print(f"🤖 Bot: @{me.username}")
-        print(f"🔗 Type: {'MAIN' if IS_MAIN_BOT else 'CLONED'}")
-        print(f"👑 Owner: {OWNER_ID}")
-        print(f"📢 Admin: {ADMIN_ID}")
-        print(f"{'='*50}")
-        
-        # Keep the bot running
-        await bot.run_until_disconnected()
-        
-    except Exception as e:
-        logger.error(f"❌ Error: {e}")
-        raise
+        bot_username = asyncio.run_coroutine_threadsafe(bot.get_me(), bot.loop).result().username
+    except:
+        pass
+    
+    html_template = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>🤫 Whisper Bot - {bot_type}</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            * {{
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            }}
+            
+            body {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                padding: 20px;
+            }}
+            
+            .container {{
+                background: white;
+                border-radius: 20px;
+                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+                max-width: 800px;
+                width: 100%;
+                overflow: hidden;
+            }}
+            
+            .header {{
+                background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+                color: white;
+                padding: 30px;
+                text-align: center;
+            }}
+            
+            .header h1 {{
+                font-size: 2.5rem;
+                margin-bottom: 10px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 15px;
+            }}
+            
+            .badge {{
+                background: #10b981;
+                color: white;
+                padding: 5px 15px;
+                border-radius: 20px;
+                font-size: 0.9rem;
+                font-weight: bold;
+            }}
+            
+            .status {{
+                background: #10b981;
+                color: white;
+                padding: 12px;
+                border-radius: 10px;
+                margin: 20px 30px;
+                text-align: center;
+                font-weight: bold;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
+            }}
+            
+            .features {{
+                padding: 30px;
+            }}
+            
+            .feature-item {{
+                background: #f3f4f6;
+                padding: 20px;
+                border-radius: 12px;
+                margin-bottom: 15px;
+                border-left: 5px solid #4f46e5;
+            }}
+            
+            .feature-item h3 {{
+                color: #4f46e5;
+                margin-bottom: 10px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }}
+            
+            .buttons {{
+                padding: 0 30px 30px;
+                display: flex;
+                gap: 15px;
+                flex-wrap: wrap;
+            }}
+            
+            .btn {{
+                flex: 1;
+                min-width: 200px;
+                background: #4f46e5;
+                color: white;
+                padding: 15px;
+                border-radius: 10px;
+                text-decoration: none;
+                text-align: center;
+                font-weight: bold;
+                transition: transform 0.3s, background 0.3s;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
+            }}
+            
+            .btn:hover {{
+                background: #3730a3;
+                transform: translateY(-3px);
+            }}
+            
+            .btn-telegram {{
+                background: #0088cc;
+            }}
+            
+            .btn-telegram:hover {{
+                background: #006699;
+            }}
+            
+            .stats {{
+                background: #f8fafc;
+                padding: 20px;
+                margin: 0 30px 30px;
+                border-radius: 12px;
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 15px;
+            }}
+            
+            .stat-item {{
+                text-align: center;
+                padding: 15px;
+                background: white;
+                border-radius: 10px;
+                box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            }}
+            
+            .stat-value {{
+                font-size: 2rem;
+                font-weight: bold;
+                color: #4f46e5;
+                margin-bottom: 5px;
+            }}
+            
+            .stat-label {{
+                color: #6b7280;
+                font-size: 0.9rem;
+            }}
+            
+            .footer {{
+                text-align: center;
+                padding: 20px;
+                color: #6b7280;
+                border-top: 1px solid #e5e7eb;
+            }}
+            
+            @media (max-width: 768px) {{
+                .header h1 {{
+                    font-size: 1.8rem;
+                    flex-direction: column;
+                }}
+                
+                .buttons {{
+                    flex-direction: column;
+                }}
+                
+                .btn {{
+                    width: 100%;
+                }}
+            }}
+        </style>
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>
+                    <i class="fas fa-user-secret"></i>
+                    Whisper Bot
+                    <span class="badge">{bot_type}</span>
+                </h1>
+                <p>Send anonymous secret messages with one click!</p>
+            </div>
+            
+            <div class="status">
+                <i class="fas fa-circle-check"></i>
+                ✅ Bot is Running | @{bot_username}
+            </div>
+            
+            <div class="stats">
+                <div class="stat-item">
+                    <div class="stat-value">{recent_users_count}</div>
+                    <div class="stat-label">Recent Users</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{whispers_count}</div>
+                    <div class="stat-label">Total Whispers</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{clones_count}</div>
+                    <div class="stat-label">Bot Clones</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{port}</div>
+                    <div class="stat-label">Port</div>
+                </div>
+            </div>
+            
+            <div class="features">
+                <div class="feature-item">
+                    <h3><i class="fas fa-bolt"></i> Instant Sending</h3>
+                    <p>Username/ID लिखते ही send! Works with ANY username or ID.</p>
+                </div>
+                
+                <div class="feature-item">
+                    <h3><i class="fas fa-shield-alt"></i> Secure & Private</h3>
+                    <p>Only intended recipient can read (except owner). गलत username/ID पर भी whisper.</p>
+                </div>
+                
+                <div class="feature-item">
+                    <h3><i class="fas fa-history"></i> Recent Users</h3>
+                    <p>All recent users automatically show for quick sending.</p>
+                </div>
+            </div>
+            
+            <div class="buttons">
+                <a href="https://t.me/{bot_username}" class="btn btn-telegram">
+                    <i class="fab fa-telegram"></i>
+                    Open in Telegram
+                </a>
+                <a href="https://t.me/{bot_username}?start=help" class="btn">
+                    <i class="fas fa-question-circle"></i>
+                    How to Use
+                </a>
+            </div>
+            
+            <div class="footer">
+                <p>Powered by ShriBots • Hosted on Render • Owner: @upspbot</p>
+                <p style="margin-top: 10px; font-size: 0.9rem;">
+                    <i class="fas fa-server"></i> Server Time: {current_time}
+                </p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return render_template_string(
+        html_template,
+        bot_type=bot_type,
+        bot_username=bot_username,
+        recent_users_count=len(recent_users),
+        whispers_count=len(all_whispers),
+        clones_count=len(clone_stats),
+        port=PORT,
+        current_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
 
-if __name__ == '__main__':
-    print("""
-    ╔══════════════════════════════════════╗
-    ║     🤫 WHISPER BOT v4.0             ║
-    ║     Owner: Shri | All Whispers      ║
-    ║     Admin Broadcast System Added    ║
-    ║     Render Optimized                ║
-    ╚══════════════════════════════════════╝
-    """)
-    
-    print(f"🚀 Starting {'MAIN' if IS_MAIN_BOT else 'CLONED'} Whisper Bot...")
-    print("✨ Key Features:")
-    print("   1. ⚡ Username/ID लिखते ही send")
-    print("   2. ✅ गलत username/ID पर भी whisper")
-    print("   3. 🔄 All recent users show")
-    print("   4. 👑 Shri button - View all whispers")
-    print("   5. 📢 Admin broadcast system")
-    print("   6. 🤖 Clone system in main bot only")
-    
+@app.route('/health')
+def health_check():
+    """Health check endpoint for Render"""
     try:
+        # Check if bot is connected
+        if bot.is_connected():
+            return {
+                "status": "healthy",
+                "bot": "@" + asyncio.run_coroutine_threadsafe(bot.get_me(), bot.loop).result().username,
+                "type": "MAIN" if IS_MAIN_BOT else "CLONED",
+                "timestamp": datetime.now().isoformat(),
+                "stats": {
+                    "recent_users": len(recent_users),
+                    "whispers": len(all_whispers),
+                    "clones": len(clone_stats),
+                    "broadcasting": broadcasting
+                }
+            }, 200
+        else:
+            return {"status": "unhealthy", "error": "Bot not connected"}, 500
+    except Exception as e:
+        return {"status": "unhealthy", "error": str(e)}, 500
+
+@app.route('/status')
+def status_page():
+    """Status page for monitoring"""
+    status_html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Bot Status</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; background: #f0f2f5; }
+            .container { max-width: 1000px; margin: 0 auto; }
+            .card { background: white; padding: 25px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+            .status-badge { display: inline-block; padding: 8px 16px; border-radius: 20px; font-weight: bold; }
+            .status-healthy { background: #d4edda; color: #155724; }
+            .status-unhealthy { background: #f8d7da; color: #721c24; }
+            .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }
+            .stat-box { background: #f8f9fa; padding: 15px; border-radius: 10px; text-align: center; border-left: 4px solid #007bff; }
+            .stat-value { font-size: 2rem; font-weight: bold; color: #007bff; }
+            .stat-label { color: #6c757d; font-size: 0.9rem; }
+            .feature-list { list-style: none; padding: 0; }
+            .feature-list li { padding: 10px; border-bottom: 1px solid #eee; display: flex; align-items: center; }
+            .feature-list li:before { content: "✓"; color: #28a745; margin-right: 10px; font-weight: bold; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="card">
+                <h1>🤫 Whisper Bot Status</h1>
+                <div class="status-badge status-healthy">✅ ACTIVE</div>
+                <p>Last checked: {current_time}</p>
+            </div>
+            
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <div class="stat-value">{recent_users}</div>
+                    <div class="stat-label">Recent Users</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value">{whispers}</div>
+                    <div class="stat-label">Total Whispers</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value">{clones}</div>
+                    <div class="stat-label">Bot Clones</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value">{port}</div>
+                    <div class="stat-label">Port</div>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>📊 Bot Information</h2>
+                <p><strong>Username:</strong> @{bot_username}</p>
+                <p><strong>Type:</strong> {bot_type}</p>
+                <p><strong>Owner ID:</strong> {owner_id}</p>
+                <p><strong>Admin ID:</strong> {admin_id}</p>
+                <p><strong>Host:</strong> Render Web Service</p>
+                <p><strong>Uptime:</strong> {uptime}</p>
+            </div>
+            
+            <div class="card">
+                <h2>✨ Active Features</h2>
+                <ul class="feature-list">
+                    <li>Instant username/ID detection</li>
+                    <li>गलत username/ID support</li>
+                    <li>Recent users display</li>
+                    <li>Owner whisper viewing</li>
+                    <li>Admin broadcast system</li>
+                    <li>Bot cloning system</li>
+                    <li>One-step sending</li>
+                </ul>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return render_template_string(
+        status_html,
+        current_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        recent_users=len(recent_users),
+        whispers=len(all_whispers),
+        clones=len(clone_stats),
+        port=PORT,
+        bot_username=asyncio.run_coroutine_threadsafe(bot.get_me(), bot.loop).result().username,
+        bot_type="MAIN" if IS_MAIN_BOT else "CLONED",
+        owner_id=OWNER_ID,
+        admin_id=ADMIN_ID,
+        uptime="Running"
+    )
+
+def run_flask():
+    """Run Flask app"""
+    app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
+
+def run_bot():
+    """Run Telegram bot"""
+    try:
+        print(f"""
+{'='*60}
+🤖 WHISPER BOT v4.0 - RENDER WEB SERVICE
+{'='*60}
+Starting bot and web server...
+Bot Type: {'MAIN' if IS_MAIN_BOT else 'CLONED'}
+Web Port: {PORT}
+Features: Instant sending, Broadcast system, Clone system
+{'='*60}
+        """)
+        
         # Start the bot
         bot.start()
         
-        # Run main function
-        import asyncio
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(main())
+        # Run bot in background
+        bot.run_until_disconnected()
         
-    except KeyboardInterrupt:
-        print("\n🛑 Bot stopped by user")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        logger.error(f"Bot error: {e}")
     finally:
         save_data()
         print("💾 Data saved successfully")
+
+if __name__ == '__main__':
+    # Import threading for running both Flask and bot
+    import threading
+    
+    # Start Flask in a separate thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Start the bot in main thread
+    run_bot()
