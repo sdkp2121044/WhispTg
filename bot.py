@@ -110,6 +110,112 @@ async def _stop_gcast(_, message: types.Message):
     )).pin(disable_notification=False)
     await message.reply_text(message.lang["gcast_stop"])
 
+
+@app.on_message(filters.command(["stats"]) & app.sudoers)
+@lang.language()
+async def _stats(_, message: types.Message):
+    """Get bot statistics"""
+    total_users = len(await db.get_users())
+    total_chats = len(await db.get_chats())
+    
+    text = message.lang["stats_text"].format(
+        total_users=total_users,
+        total_chats=total_chats,
+        total=total_users + total_chats
+    )
+    await message.reply_text(text)
+
+
+@app.on_message(filters.command(["status"]) & app.sudoers)
+@lang.language()
+async def _status(_, message: types.Message):
+    """Check broadcast status"""
+    global broadcasting
+    status_text = message.lang["gcast_active"] if broadcasting else message.lang["gcast_inactive"]
+    await message.reply_text(status_text)
+
+
+@app.on_message(filters.command(["chatcast", "cbc"]) & app.sudoers)
+@lang.language()
+async def _chatcast(_, message: types.Message):
+    """Broadcast to chats only"""
+    if not message.reply_to_message:
+        return await message.reply_text(message.lang["gcast_usage"])
+    
+    msg = message.reply_to_message
+    chats = await db.get_chats()
+    count = 0
+    sent = await message.reply_text(message.lang["chatcast_start"])
+    
+    for chat in chats:
+        try:
+            await msg.forward(chat)
+            count += 1
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            continue
+    
+    await sent.edit_text(message.lang["chatcast_end"].format(count))
+
+
+@app.on_message(filters.command(["usercast", "ubc"]) & app.sudoers)
+@lang.language()
+async def _usercast(_, message: types.Message):
+    """Broadcast to users only"""
+    if not message.reply_to_message:
+        return await message.reply_text(message.lang["gcast_usage"])
+    
+    msg = message.reply_to_message
+    users = await db.get_users()
+    count = 0
+    sent = await message.reply_text(message.lang["usercast_start"])
+    
+    for user in users:
+        try:
+            await msg.forward(user)
+            count += 1
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            continue
+    
+    await sent.edit_text(message.lang["usercast_end"].format(count))
+
+
+@app.on_message(filters.command(["announce"]) & app.sudoers)
+@lang.language()
+async def _announce(_, message: types.Message):
+    """Send announcement to all users and chats"""
+    if len(message.command) < 2:
+        return await message.reply_text(message.lang["announce_usage"])
+    
+    text = " ".join(message.command[1:])
+    chats = await db.get_chats()
+    users = await db.get_users()
+    all_chats = chats + users
+    
+    count = 0
+    sent = await message.reply_text(message.lang["announce_start"])
+    
+    for chat in all_chats:
+        try:
+            await app.send_message(chat_id=chat, text=text)
+            count += 1
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            continue
+    
+    await sent.edit_text(message.lang["announce_end"].format(count))
+
+
+@app.on_message(filters.command(["ping"]) & app.sudoers)
+async def _ping(_, message: types.Message):
+    """Check bot ping"""
+    start = time.time()
+    msg = await message.reply_text("🏓 Pong!")
+    end = time.time()
+    await msg.edit_text(f"🏓 Pong! `{round((end - start) * 1000, 2)}ms`")
+
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
