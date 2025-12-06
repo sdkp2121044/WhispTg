@@ -4,7 +4,8 @@ import re
 import asyncio
 import json
 from datetime import datetime
-from flask import Flask, render_template_string
+from flask import Flask, render_template_string, jsonify
+import threading
 from telethon import TelegramClient, events, Button
 
 # Configure logging
@@ -16,8 +17,8 @@ logger = logging.getLogger(__name__)
 
 # Environment variables
 API_ID = int(os.getenv('API_ID', ''))
-API_HASH = os.getenv('API_HASH', '')
-BOT_TOKEN = os.getenv('BOT_TOKEN', '')
+API_HASH = os.getenv('API_HASH', ''))
+BOT_TOKEN = os.getenv('BOT_TOKEN', ''))
 ADMIN_ID = int(os.getenv('ADMIN_ID', ''))
 OWNER_ID = ADMIN_ID  # Shri button owner ID
 PORT = int(os.environ.get('PORT', 10000))
@@ -1483,7 +1484,7 @@ async def mybot_handler(event):
         ]
     )
 
-# Flask routes
+# Flask routes for Web Service
 @app.route('/')
 def home():
     bot_username = "bot_username"
@@ -1494,7 +1495,7 @@ def home():
     except:
         pass
     
-    html_template = """
+    html_template = '''
     <!DOCTYPE html>
     <html>
     <head>
@@ -1748,7 +1749,7 @@ def home():
         </div>
     </body>
     </html>
-    """
+    '''
     
     return render_template_string(
         html_template,
@@ -1767,7 +1768,7 @@ def health_check():
     try:
         # Check if bot is connected
         if bot.is_connected():
-            return {
+            return jsonify({
                 "status": "healthy",
                 "bot": "@" + asyncio.run_coroutine_threadsafe(bot.get_me(), bot.loop).result().username,
                 "type": "MAIN" if IS_MAIN_BOT else "CLONED",
@@ -1778,34 +1779,40 @@ def health_check():
                     "clones": len(clone_stats),
                     "broadcasting": broadcasting
                 }
-            }, 200
+            }), 200
         else:
-            return {"status": "unhealthy", "error": "Bot not connected"}, 500
+            return jsonify({"status": "unhealthy", "error": "Bot not connected"}), 500
     except Exception as e:
-        return {"status": "unhealthy", "error": str(e)}, 500
+        return jsonify({"status": "unhealthy", "error": str(e)}), 500
 
 @app.route('/status')
 def status_page():
     """Status page for monitoring"""
-    status_html = """
+    bot_username = "Unknown"
+    try:
+        bot_username = asyncio.run_coroutine_threadsafe(bot.get_me(), bot.loop).result().username
+    except:
+        pass
+    
+    status_html = '''
     <!DOCTYPE html>
     <html>
     <head>
         <title>Bot Status</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 40px; background: #f0f2f5; }
-            .container { max-width: 1000px; margin: 0 auto; }
-            .card { background: white; padding: 25px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
-            .status-badge { display: inline-block; padding: 8px 16px; border-radius: 20px; font-weight: bold; }
-            .status-healthy { background: #d4edda; color: #155724; }
-            .status-unhealthy { background: #f8d7da; color: #721c24; }
-            .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }
-            .stat-box { background: #f8f9fa; padding: 15px; border-radius: 10px; text-align: center; border-left: 4px solid #007bff; }
-            .stat-value { font-size: 2rem; font-weight: bold; color: #007bff; }
-            .stat-label { color: #6c757d; font-size: 0.9rem; }
-            .feature-list { list-style: none; padding: 0; }
-            .feature-list li { padding: 10px; border-bottom: 1px solid #eee; display: flex; align-items: center; }
-            .feature-list li:before { content: "✓"; color: #28a745; margin-right: 10px; font-weight: bold; }
+            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f0f2f5; }}
+            .container {{ max-width: 1000px; margin: 0 auto; }}
+            .card {{ background: white; padding: 25px; border-radius: 15px; margin-bottom: 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.1); }}
+            .status-badge {{ display: inline-block; padding: 8px 16px; border-radius: 20px; font-weight: bold; }}
+            .status-healthy {{ background: #d4edda; color: #155724; }}
+            .status-unhealthy {{ background: #f8d7da; color: #721c24; }}
+            .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }}
+            .stat-box {{ background: #f8f9fa; padding: 15px; border-radius: 10px; text-align: center; border-left: 4px solid #007bff; }}
+            .stat-value {{ font-size: 2rem; font-weight: bold; color: #007bff; }}
+            .stat-label {{ color: #6c757d; font-size: 0.9rem; }}
+            .feature-list {{ list-style: none; padding: 0; }}
+            .feature-list li {{ padding: 10px; border-bottom: 1px solid #eee; display: flex; align-items: center; }}
+            .feature-list li:before {{ content: "✓"; color: #28a745; margin-right: 10px; font-weight: bold; }}
         </style>
     </head>
     <body>
@@ -1860,7 +1867,7 @@ def status_page():
         </div>
     </body>
     </html>
-    """
+    '''
     
     return render_template_string(
         status_html,
@@ -1869,17 +1876,19 @@ def status_page():
         whispers=len(all_whispers),
         clones=len(clone_stats),
         port=PORT,
-        bot_username=asyncio.run_coroutine_threadsafe(bot.get_me(), bot.loop).result().username,
+        bot_username=bot_username,
         bot_type="MAIN" if IS_MAIN_BOT else "CLONED",
         owner_id=OWNER_ID,
         admin_id=ADMIN_ID,
         uptime="Running"
     )
 
+# Start Flask server
 def run_flask():
     """Run Flask app"""
     app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
 
+# Start bot
 def run_bot():
     """Run Telegram bot"""
     try:
@@ -1907,9 +1916,6 @@ Features: Instant sending, Broadcast system, Clone system
         print("💾 Data saved successfully")
 
 if __name__ == '__main__':
-    # Import threading for running both Flask and bot
-    import threading
-    
     # Start Flask in a separate thread
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
