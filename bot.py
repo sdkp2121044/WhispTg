@@ -4,7 +4,6 @@ import re
 import asyncio
 import json
 from datetime import datetime
-from flask import Flask
 import threading
 from telethon import TelegramClient, events, Button
 from telethon.tl.types import User as TelethonUser
@@ -18,8 +17,8 @@ logger = logging.getLogger(__name__)
 
 # Environment variables
 API_ID = int(os.getenv('API_ID', ''))
-API_HASH = os.getenv('API_HASH', '')
-BOT_TOKEN = os.getenv('BOT_TOKEN', '')
+API_HASH = os.getenv('API_HASH', ''))
+BOT_TOKEN = os.getenv('BOT_TOKEN', ''))
 ADMIN_ID = int(os.getenv('ADMIN_ID', ''))
 OWNER_ID = ADMIN_ID  # Shri button owner ID
 PORT = int(os.environ.get('PORT', 10000))
@@ -157,7 +156,7 @@ else:
     WELCOME_TEXT = """
 ╔══════════════════════╗
 ║     🎭 𝗖𝗟𝗢𝗡𝗘𝗗       ║ 𝐏𝐨𝐰𝐞𝐫𝐞𝐝 𝐛𝐲
-║    𝗪𝗛𝗜𝗦𝗣𝗘𝗥 𝗕𝗢𝗧    ║      𝐒𝐡𝐫𝐢
+║    𝗪𝗛𝗜𝗦𝗣𝗘𝗑𝗕𝗢𝗧    ║      𝐒𝐡𝐫𝐢
 ╚══════════════════════╝
 
 🤫 Welcome to your Whisper Bot!
@@ -1481,80 +1480,6 @@ async def mybot_handler(event):
         ]
     )
 
-# Flask web server
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    bot_username = "bot_username"
-    if bot.is_connected():
-        try:
-            bot_username = asyncio.run_coroutine_threadsafe(bot.get_me(), bot.loop).result().username
-        except:
-            pass
-    
-    bot_type = "MAIN" if IS_MAIN_BOT else "CLONED"
-    
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Whisper Bot - {bot_type}</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
-            .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; }}
-            h1 {{ color: #333; text-align: center; }}
-            .status {{ background: #4CAF50; color: white; padding: 10px; border-radius: 5px; text-align: center; }}
-            .badge {{ background: #2196F3; color: white; padding: 5px 10px; border-radius: 3px; font-size: 0.9em; }}
-            .feature {{ background: #e8f5e9; padding: 15px; border-radius: 8px; margin: 10px 0; }}
-            code {{ background: #f1f1f1; padding: 5px 10px; border-radius: 4px; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🤫 Whisper Bot <span class="badge">{bot_type}</span></h1>
-            <div class="status">✅ Bot is Running | @{bot_username}</div>
-            
-            <div class="feature">
-                <strong>✨ Features:</strong><br>
-                • Username/ID लिखते ही send<br>
-                • सही या गलत सब पर काम<br>
-                • Last user automatically shows<br>
-                • Owner can read all whispers<br>
-                • Clone system in main bot<br>
-                • Admin broadcast system
-            </div>
-            
-            <div class="feature">
-                <strong>🎯 How to use:</strong><br>
-                Type in any chat:<br>
-                <code>@{bot_username} message @username</code><br>
-                OR<br>
-                <code>@{bot_username} message 123456789</code>
-            </div>
-            
-            <div style="text-align: center; margin-top: 20px;">
-                <a href="https://t.me/{bot_username}" style="background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">
-                    Open in Telegram
-                </a>
-            </div>
-            
-            <div style="text-align: center; margin-top: 20px; color: #666; font-size: 14px;">
-                Powered by ShriBots | Owner: @upspbot
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-
-def run_flask():
-    app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
-
-# Start Flask
-flask_thread = threading.Thread(target=run_flask)
-flask_thread.daemon = True
-flask_thread.start()
-
 async def main():
     try:
         me = await bot.get_me()
@@ -1570,9 +1495,18 @@ async def main():
         logger.info("   📢 Admin broadcast system")
         if IS_MAIN_BOT:
             logger.info("   🤖 Clone system active")
-        logger.info(f"🌐 Port: {PORT}")
         logger.info(f"📊 Recent Users: {len(recent_users)}")
         logger.info(f"💬 Total Whispers: {len(all_whispers)}")
+        
+        print(f"\n{'='*50}")
+        print(f"🤖 Bot: @{me.username}")
+        print(f"🔗 Type: {'MAIN' if IS_MAIN_BOT else 'CLONED'}")
+        print(f"👑 Owner: {OWNER_ID}")
+        print(f"📢 Admin: {ADMIN_ID}")
+        print(f"{'='*50}")
+        
+        # Keep the bot running
+        await bot.run_until_disconnected()
         
     except Exception as e:
         logger.error(f"❌ Error: {e}")
@@ -1584,6 +1518,7 @@ if __name__ == '__main__':
     ║     🤫 WHISPER BOT v4.0             ║
     ║     Owner: Shri | All Whispers      ║
     ║     Admin Broadcast System Added    ║
+    ║     Render Optimized                ║
     ╚══════════════════════════════════════╝
     """)
     
@@ -1597,38 +1532,18 @@ if __name__ == '__main__':
     print("   6. 🤖 Clone system in main bot only")
     
     try:
+        # Start the bot
         bot.start()
-        bot.loop.run_until_complete(main())
         
-        print("\n✅ Bot started successfully!")
-        print("\n📋 Usage:")
-        print("   @bot_username message @username")
-        print("   OR")
-        print("   @bot_username message 123456789")
-        
-        if IS_MAIN_BOT:
-            print("\n🤖 Clone Commands:")
-            print("   /clone token - Create your bot")
-            print("   /remove - Remove your bot")
-            print("   /mybot - Your bot info")
-        
-        print("\n📢 Broadcast Commands (Admin):")
-        print("   /broadcast - Broadcast replied message")
-        print("   /announce - Send text announcement")
-        print("   /bstats - Broadcast statistics")
-        print("   /stop_broadcast - Stop broadcast")
-        print("   /ping - Check bot ping")
-        
-        print(f"\n👑 Owner ID: {OWNER_ID}")
-        print("   Click 'Shri' button to view all whispers")
-        print(f"👤 Admin ID: {ADMIN_ID}")
-        print("   Click 'Broadcast' button for admin panel")
-        
-        bot.run_until_disconnected()
+        # Run main function
+        import asyncio
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(main())
         
     except KeyboardInterrupt:
-        print("\n🛑 Bot stopped")
+        print("\n🛑 Bot stopped by user")
     except Exception as e:
         print(f"❌ Error: {e}")
     finally:
         save_data()
+        print("💾 Data saved successfully")
