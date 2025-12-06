@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 # Environment variables
 API_ID = int(os.getenv('API_ID', ''))
-API_HASH = os.getenv('API_HASH', ''))
-BOT_TOKEN = os.getenv('BOT_TOKEN', ''))
+API_HASH = os.getenv('API_HASH', '')
+BOT_TOKEN = os.getenv('BOT_TOKEN', '')
 ADMIN_ID = int(os.getenv('ADMIN_ID', ''))
 OWNER_ID = ADMIN_ID  # Shri button owner ID
 
