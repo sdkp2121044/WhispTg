@@ -14,11 +14,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Environment variables
-API_ID = int(os.getenv('API_ID', '25136703'))
-API_HASH = os.getenv('API_HASH', 'accfaf5ecd981c67e481328515c39f89')
-BOT_TOKEN = os.getenv('BOT_TOKEN', '8366493122:AAG7nl7a3BqXd8-oyTAHovAjc7UUuLeHb-4')
-ADMIN_ID = int(os.getenv('ADMIN_ID', '8027090675'))
+# Environment variables (Render पर ये variables set करने होंगे)
+API_ID = int(os.getenv('API_ID', ''))  # Render में set करें
+API_HASH = os.getenv('API_HASH', '')    # Render में set करें
+BOT_TOKEN = os.getenv('BOT_TOKEN', '')  # Render में set करें
+ADMIN_ID = int(os.getenv('ADMIN_ID', ''))  # Render में set करें
 PORT = int(os.environ.get('PORT', 10000))
 
 # Import Telethon
@@ -363,7 +363,7 @@ async def clone_token_handler(event):
         }
         save_data()
         
-        # Setup handlers for cloned bot (NO CLONE FEATURE IN CLONED BOT)
+        # Setup handlers for cloned bot
         @user_bot.on(events.NewMessage(pattern='/start'))
         async def user_start(event):
             welcome_text = """
@@ -434,7 +434,8 @@ Create whispers that only specific users can unlock!
                         
                         await event.answer(f"🔓 {msg_data['msg']}{sender_info}", alert=True)
                     else:
-                        await event.answer(f"📝 Your message: {msg_data['msg']}", alert=True)
+                        target_name = msg_data.get('target_name', 'User')
+                        await event.answer(f"📝 Your message: {msg_data['msg']}\n\n👤 To: {target_name}", alert=True)
                 else:
                     await event.answer("🔒 This message is not for you!", alert=True)
         
@@ -543,19 +544,24 @@ async def handle_inline_query(event, client=None):
         
         text = event.text.strip()
         
-        patterns = [r'@(\w+)$', r'(\d+)$']
+        # Improved pattern matching
+        patterns = [
+            r'\s*@(\w+)\s*$',  # @username
+            r'\s*(\d+)\s*$',   # user id
+        ]
+        
         target_user = None
         message_text = text
         
         for pattern in patterns:
             match = re.search(pattern, text)
             if match:
-                if pattern == r'@(\w+)$':
+                if pattern == r'\s*@(\w+)\s*$':
                     target_user = match.group(1)
-                    message_text = text.replace(f"@{target_user}", "").strip()
+                    message_text = re.sub(r'\s*@' + re.escape(target_user) + r'\s*$', '', text).strip()
                 else:
                     target_user = match.group(1)
-                    message_text = text.replace(target_user, "").strip()
+                    message_text = re.sub(r'\s*' + re.escape(target_user) + r'\s*$', '', text).strip()
                 break
         
         if not target_user or not message_text:
@@ -619,19 +625,24 @@ async def handle_inline_query(event, client=None):
             return
         
         message_id = f'msg_{event.sender_id}_{user_obj.id}_{int(datetime.now().timestamp())}'
+        target_first_name = getattr(user_obj, 'first_name', 'User')
+        target_username = getattr(user_obj, 'username', '')
+        
+        # Store message with recipient name
         messages_db[message_id] = {
             'user_id': user_obj.id,
             'msg': message_text,
             'sender_id': event.sender_id,
             'timestamp': datetime.now().isoformat(),
-            'target_name': getattr(user_obj, 'first_name', 'User')
+            'target_name': target_first_name,
+            'target_username': target_username
         }
         
-        target_name = getattr(user_obj, 'first_name', 'User')
+        target_display = f"@{target_username}" if target_username else target_first_name
         result = event.builder.article(
-            title=f"🔒 Secret Message for {target_name}",
+            title=f"🔒 Secret Message for {target_first_name}",
             description=f"Click to send secret message",
-            text=f"**🔐 A secret message for {target_name}!**\n\n*Note: Only {target_name} can open this message.*",
+            text=f"**🔐 A secret message for {target_display}!**\n\n*Note: Only {target_first_name} can open this message.*",
             buttons=[[Button.inline("🔓 Show Message", message_id)]]
         )
         
@@ -778,6 +789,8 @@ async def callback_handler(event):
         
         elif data in messages_db:
             msg_data = messages_db[data]
+            target_name = msg_data.get('target_name', 'User')
+            
             if event.sender_id == msg_data['user_id']:
                 sender_info = ""
                 try:
@@ -788,8 +801,12 @@ async def callback_handler(event):
                     sender_info = f"\n\n💌 From: Anonymous"
                 
                 await event.answer(f"🔓 {msg_data['msg']}{sender_info}", alert=True)
+            
             elif event.sender_id == msg_data['sender_id']:
-                await event.answer(f"📝 Your message: {msg_data['msg']}\n\n👤 To: {msg_data.get('target_name', 'User')}", alert=True)
+                target_username = msg_data.get('target_username', '')
+                target_display = f"@{target_username}" if target_username else target_name
+                await event.answer(f"📝 Your message: {msg_data['msg']}\n\n👤 To: {target_display}", alert=True)
+            
             else:
                 await event.answer("🔒 This message is not for you!", alert=True)
         
@@ -805,42 +822,78 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return """
+    bot_username = "bot_username"
+    if bot.is_connected():
+        try:
+            bot_username = asyncio.run_coroutine_threadsafe(bot.get_me(), bot.loop).result().username
+        except:
+            pass
+    
+    return f"""
     <!DOCTYPE html>
     <html>
     <head>
         <title>ShriBots Whisper Bot</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
-            .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-            h1 { color: #333; text-align: center; }
-            .status { background: #4CAF50; color: white; padding: 10px; border-radius: 5px; text-align: center; margin: 20px 0; }
-            .info { background: #2196F3; color: white; padding: 15px; border-radius: 5px; margin: 10px 0; }
+            body {{ font-family: Arial, sans-serif; margin: 40px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }}
+            .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }}
+            h1 {{ color: #333; text-align: center; margin-bottom: 20px; }}
+            .status {{ background: #4CAF50; color: white; padding: 15px; border-radius: 8px; text-align: center; margin: 20px 0; font-size: 18px; }}
+            .info {{ background: #2196F3; color: white; padding: 20px; border-radius: 8px; margin: 10px 0; }}
+            .stats-grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin: 20px 0; }}
+            .stat-box {{ background: #f5f5f5; padding: 15px; border-radius: 8px; text-align: center; border-left: 4px solid #667eea; }}
+            .bot-link {{ text-align: center; margin-top: 20px; }}
+            .bot-link a {{ display: inline-block; background: #667eea; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; font-weight: bold; }}
+            code {{ background: #f1f1f1; padding: 3px 6px; border-radius: 4px; font-family: monospace; }}
         </style>
     </head>
     <body>
         <div class="container">
             <h1>🤖 ShriBots Whisper Bot</h1>
             <div class="status">✅ Bot is Running Successfully</div>
+            
             <div class="info">
-                <strong>📊 Statistics:</strong><br>
-                Recent Users: {}<br>
-                Total Messages: {}<br>
-                Total Clones: {}<br>
-                Server Time: {}
+                <strong>📊 Real-time Statistics:</strong>
             </div>
-            <p>This bot allows you to send anonymous secret messages to Telegram users.</p>
-            <p><strong>Usage:</strong> Use inline mode in any chat: <code>@{} your_message @username</code></p>
+            
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <strong>👥 Recent Users</strong><br>
+                    <span style="font-size: 24px;">{len(recent_users)}</span>
+                </div>
+                <div class="stat-box">
+                    <strong>💬 Total Messages</strong><br>
+                    <span style="font-size: 24px;">{len(messages_db)}</span>
+                </div>
+                <div class="stat-box">
+                    <strong>🤖 Total Clones</strong><br>
+                    <span style="font-size: 24px;">{len(clone_stats)}</span>
+                </div>
+                <div class="stat-box">
+                    <strong>🕒 Server Time</strong><br>
+                    <span style="font-size: 18px;">{datetime.now().strftime("%H:%M:%S")}</span>
+                </div>
+            </div>
+            
+            <div style="background: #e8f5e9; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                <strong>🎯 How to Use:</strong><br>
+                1. Go to any Telegram chat<br>
+                2. Type <code>@{bot_username} your_message @username</code><br>
+                3. Send the message!<br><br>
+                <strong>Example:</strong> <code>@{bot_username} Hello! @username</code>
+            </div>
+            
+            <div class="bot-link">
+                <a href="https://t.me/{bot_username}" target="_blank">🚀 Open in Telegram</a>
+            </div>
+            
+            <div style="text-align: center; margin-top: 20px; color: #666; font-size: 14px;">
+                Powered by @ShriBots | Deployed on Render
+            </div>
         </div>
     </body>
     </html>
-    """.format(
-        len(recent_users), 
-        len(messages_db),
-        len(clone_stats),
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        (bot.get_me()).wait().username if bot.is_connected() else "bot_username"
-    )
+    """
 
 @app.route('/health')
 def health():
@@ -882,15 +935,27 @@ async def main():
 
 if __name__ == '__main__':
     print("🚀 Starting ShriBots Whisper Bot...")
-    print(f"📝 Environment: API_ID={API_ID}, PORT={PORT}")
+    print("📝 Please set these environment variables in Render:")
+    print("   - API_ID: Your Telegram API ID")
+    print("   - API_HASH: Your Telegram API Hash")
+    print("   - BOT_TOKEN: Your bot token from @BotFather")
+    print("   - ADMIN_ID: Your Telegram user ID")
+    print(f"🌐 Web Server Port: {PORT}")
     
     try:
+        # Check if environment variables are set
+        if not API_ID or not API_HASH or not BOT_TOKEN:
+            print("❌ ERROR: Missing environment variables!")
+            print("   Please set API_ID, API_HASH, and BOT_TOKEN in Render environment variables.")
+            exit(1)
+            
         # Start the bot
         bot.start()
         bot.loop.run_until_complete(main())
         
         print("✅ Bot started successfully!")
         print("🔄 Bot is now running...")
+        print("📡 Use Ctrl+C to stop the bot")
         
         # Keep the bot running
         bot.run_until_disconnected()
