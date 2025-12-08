@@ -16,12 +16,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Environment variables
-API_ID = int(os.getenv('API_ID', '25136703'))
-API_HASH = os.getenv('API_HASH', 'accfaf5ecd981c67e481328515c39f89')
-BOT_TOKEN = os.getenv('BOT_TOKEN', '8366493122:AAG7nl7a3BqXd8-oyTAHovAjc7UUuLeHb-4')
-ADMIN_ID = int(os.getenv('ADMIN_ID', '8027090675'))
+API_ID = int(os.environ.get('API_ID'))
+API_HASH = os.environ.get('API_HASH')
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+ADMIN_ID = int(os.environ.get('ADMIN_ID'))
 PORT = int(os.environ.get('PORT', 10000))
-
 # Import Telethon
 try:
     from telethon import TelegramClient, events, Button
