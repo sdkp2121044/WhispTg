@@ -1344,13 +1344,18 @@ async def callback_handler(event):
                 buttons=[[Button.inline("🔙 Back", data="broadcast_menu")]]
             )
         
-        elif data.startswith("confirm_clone:"):
+                elif data.startswith("confirm_clone:"):
             # Handle bot cloning confirmation
             token = data.replace("confirm_clone:", "")
             user_id = event.sender_id
             
-            await event.answer("🔄 Creating your bot...", alert=False)
+            # First delete the old message to avoid edit error
+            try:
+                await event.delete()
+            except:
+                pass
             
+            # Send new message instead of editing
             try:
                 # Create cloned bot
                 bot_username = await create_cloned_bot(user_id, token)
@@ -1367,7 +1372,7 @@ async def callback_handler(event):
                     }
                     save_data()
                     
-                    await event.edit(
+                    success_message = (
                         f"✅ **Bot Successfully Created!**\n\n"
                         f"**Your Bot:** @{bot_username}\n"
                         f"**Token:** `{token[:10]}...`\n"
@@ -1379,27 +1384,36 @@ async def callback_handler(event):
                         f"**Commands for your bot:**\n"
                         f"• /start - Start your bot\n"
                         f"• /stats - View your stats\n\n"
-                        f"🎉 **Start using @{bot_username} now!**",
+                        f"🎉 **Start using @{bot_username} now!**"
+                    )
+                    
+                    await event.respond(
+                        success_message,
                         buttons=[
                             [Button.url(f"🚀 Start @{bot_username}", f"https://t.me/{bot_username}")],
                             [Button.inline("📊 My Stats", data="my_clone_stats")]
                         ]
                     )
                 else:
-                    await event.edit(
+                    error_message = (
                         "❌ **Failed to create bot!**\n\n"
                         "Possible reasons:\n"
                         "• Invalid token\n"
                         "• Token already in use\n"
                         "• BotFather API limit\n\n"
-                        "Please check your token and try again.",
+                        "Please check your token and try again."
+                    )
+                    
+                    await event.respond(
+                        error_message,
                         buttons=[[Button.inline("🔄 Try Again", data="clone_info")]]
                     )
                     
             except Exception as e:
                 logger.error(f"Clone confirmation error: {e}")
-                await event.edit(
-                    f"❌ **Error creating bot:** {str(e)[:100]}",
+                error_msg = f"❌ **Error creating bot:** {str(e)[:100]}"
+                await event.respond(
+                    error_msg,
                     buttons=[[Button.inline("🔙 Back", data="clone_info")]]
                 )
         
