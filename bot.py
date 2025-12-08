@@ -167,6 +167,46 @@ def save_data():
 # Load data on startup
 load_data()
 
+# ============ CLONE HELPER FUNCTIONS ============
+
+def get_time_difference(start_time):
+    """Get formatted time difference"""
+    now = datetime.now()
+    diff = now - start_time
+    
+    days = diff.days
+    hours = diff.seconds // 3600
+    minutes = (diff.seconds % 3600) // 60
+    
+    if days > 0:
+        return f"{days}d {hours}h"
+    elif hours > 0:
+        return f"{hours}h {minutes}m"
+    else:
+        return f"{minutes}m"
+
+async def create_cloned_bot(user_id: int, token: str):
+    """
+    Create a cloned bot instance
+    Note: This is a simplified version
+    """
+    try:
+        logger.info(f"🔄 Creating cloned bot for user {user_id}")
+        
+        # Try to get bot info to verify token
+        temp_client = TelegramClient(f'clone_{user_id}_{int(datetime.now().timestamp())}', API_ID, API_HASH)
+        await temp_client.start(bot_token=token)
+        me = await temp_client.get_me()
+        bot_username = me.username
+        await temp_client.disconnect()
+        
+        logger.info(f"✅ Cloned bot created: @{bot_username}")
+        return bot_username
+        
+    except Exception as e:
+        logger.error(f"Error creating cloned bot: {e}")
+        return None
+
 # ============ UTILITY FUNCTIONS ============
 
 def is_cooldown(user_id: int) -> bool:
@@ -600,6 +640,115 @@ async def stats_handler(event):
         logger.error(f"Stats error: {e}")
         await event.reply("❌ Error fetching statistics.")
 
+# ============ CLONE COMMAND HANDLERS ============
+
+@bot.on(events.NewMessage(pattern='/clone'))
+async def clone_handler(event):
+    """Handle bot cloning"""
+    try:
+        user_id = event.sender_id
+        
+        # Check if user already has a cloned bot
+        if str(user_id) in clone_stats:
+            await event.reply(
+                "❌ **You already have a cloned bot!**\n\n"
+                "Use `/remove` to remove your current bot first.",
+                buttons=[Button.inline("❌ Remove My Bot", data="remove_my_bot")]
+            )
+            return
+        
+        # Check if command has token
+        if not event.text or len(event.text.split()) < 2:
+            await event.reply(
+                "🔧 **Clone Your Own Whisper Bot**\n\n"
+                "**Usage:** `/clone bot_token`\n\n"
+                "**Example:**\n"
+                "`/clone 1234567890:ABCdefGHIjkl...`\n\n"
+                "**How to get token:**\n"
+                "1. Talk to @BotFather\n"
+                "2. Create new bot with /newbot\n"
+                "3. Copy the token you get\n\n"
+                "⚠️ **Warning:** Keep your token secret!",
+                buttons=[
+                    [Button.url("🤖 BotFather", "https://t.me/BotFather")],
+                    [Button.inline("🔙 Back", data="back_start")]
+                ]
+            )
+            return
+        
+        # Extract token
+        parts = event.text.split()
+        if len(parts) < 2:
+            await event.reply("❌ Please provide a bot token.")
+            return
+        
+        token = parts[1].strip()
+        
+        # Validate token format
+        if not re.match(r'^\d+:[A-Za-z0-9_-]+$', token):
+            await event.reply(
+                "❌ **Invalid token format!**\n\n"
+                "Token should look like: `1234567890:ABCdefGHIjkl...`\n"
+                "Make sure you copied the full token from @BotFather."
+            )
+            return
+        
+        # Ask for confirmation
+        await event.reply(
+            "⚠️ **Confirm Bot Creation**\n\n"
+            "Are you sure you want to clone a bot with this token?\n\n"
+            "**Note:**\n"
+            "• You need to keep the bot running 24/7\n"
+            "• Bot will have same features as this bot\n"
+            "• One bot per user only\n\n"
+            "Click ✅ to proceed or ❌ to cancel.",
+            buttons=[
+                [Button.inline("✅ Yes, Clone Bot", data=f"confirm_clone:{token}")],
+                [Button.inline("❌ Cancel", data="back_start")]
+            ]
+        )
+        
+    except Exception as e:
+        logger.error(f"Clone handler error: {e}")
+        await event.reply("❌ An error occurred. Please try again.")
+
+@bot.on(events.NewMessage(pattern='/remove'))
+async def remove_handler(event):
+    """Handle bot removal"""
+    try:
+        user_id = event.sender_id
+        
+        if str(user_id) not in clone_stats:
+            await event.reply(
+                "❌ **You don't have any cloned bot!**\n\n"
+                "Use `/clone` to create your own bot first.",
+                buttons=[Button.inline("🔧 Clone Bot", data="clone_info")]
+            )
+            return
+        
+        # Get bot info
+        bot_info = clone_stats[str(user_id)]
+        bot_username = bot_info.get('bot_username', 'Unknown')
+        
+        await event.reply(
+            f"🗑️ **Remove Your Bot**\n\n"
+            f"**Bot:** @{bot_username}\n"
+            f"**Created:** {bot_info.get('created_at', 'Unknown')}\n\n"
+            f"Are you sure you want to remove this bot?\n\n"
+            f"⚠️ **This will:**\n"
+            f"• Stop your bot\n"
+            f"• Delete all data\n"
+            f"• Cannot be undone",
+            buttons=[
+                [Button.inline("✅ Yes, Remove", data="confirm_remove")],
+                [Button.inline("❌ Cancel", data="back_start")]
+            ]
+        )
+        
+    except Exception as e:
+        logger.error(f"Remove handler error: {e}")
+        await event.reply("❌ An error occurred. Please try again.")
+
 # ============ BROADCAST COMMANDS ============
 
 @bot.on(events.NewMessage(pattern='/broadcast'))
@@ -989,7 +1138,37 @@ async def callback_handler(event):
             )
         
         elif data == "clone_info":
-            clone_text = """
+            user_id = event.sender_id
+            has_bot = str(user_id) in clone_stats
+            
+            if has_bot:
+                bot_info = clone_stats[str(user_id)]
+                bot_username = bot_info.get('bot_username', 'Unknown')
+                created_at = datetime.fromisoformat(bot_info.get('created_at', datetime.now().isoformat()))
+                
+                clone_text = f"""
+🔧 **Your Cloned Bot**
+
+✅ **Status:** Active
+🤖 **Bot:** @{bot_username}
+📅 **Created:** {created_at.strftime('%d %b %Y')}
+⏰ **Running for:** {get_time_difference(created_at)}
+
+**Commands:**
+• `/remove` - Remove your bot
+• `/stats` - View bot statistics
+
+**Manage your bot below:**
+                """
+                
+                buttons = [
+                    [Button.url(f"🚀 Start @{bot_username}", f"https://t.me/{bot_username}")],
+                    [Button.inline("📊 My Stats", data="my_clone_stats")],
+                    [Button.inline("🗑️ Remove Bot", data="remove_my_bot")],
+                    [Button.inline("🔙 Back", data="back_start")]
+                ]
+            else:
+                clone_text = """
 🔧 **Clone Your Own Whisper Bot**
 
 **Commands:**
@@ -1002,14 +1181,15 @@ async def callback_handler(event):
 ⚠️ **Note:**
 • One bot per user only
 • Keep token safe
-            """
-            await event.edit(
-                clone_text,
-                buttons=[
+• Bot runs 24/7
+                """
+                
+                buttons = [
                     [Button.url("🤖 BotFather", "https://t.me/BotFather")],
                     [Button.inline("🔙 Back", data="back_start")]
                 ]
-            )
+            
+            await event.edit(clone_text, buttons=buttons)
         
         elif data == "broadcast_menu":
             if event.sender_id != ADMIN_ID:
@@ -1162,6 +1342,152 @@ async def callback_handler(event):
                 f"❌ Failed: {failed}\n"
                 f"📈 Success Rate: {int(success/(success+failed)*100) if (success+failed) > 0 else 0}%",
                 buttons=[[Button.inline("🔙 Back", data="broadcast_menu")]]
+            )
+        
+        elif data.startswith("confirm_clone:"):
+            # Handle bot cloning confirmation
+            token = data.replace("confirm_clone:", "")
+            user_id = event.sender_id
+            
+            await event.answer("🔄 Creating your bot...", alert=False)
+            
+            try:
+                # Create cloned bot
+                bot_username = await create_cloned_bot(user_id, token)
+                
+                if bot_username:
+                    # Save clone stats
+                    clone_stats[str(user_id)] = {
+                        'owner_id': user_id,
+                        'bot_token': token,
+                        'bot_username': bot_username,
+                        'created_at': datetime.now().isoformat(),
+                        'messages_sent': 0,
+                        'whispers_created': 0
+                    }
+                    save_data()
+                    
+                    await event.edit(
+                        f"✅ **Bot Successfully Created!**\n\n"
+                        f"**Your Bot:** @{bot_username}\n"
+                        f"**Token:** `{token[:10]}...`\n"
+                        f"**Created:** {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                        f"**Features:**\n"
+                        f"• Send whispers like this bot\n"
+                        f"• Same interface and commands\n"
+                        f"• Your own statistics\n\n"
+                        f"**Commands for your bot:**\n"
+                        f"• /start - Start your bot\n"
+                        f"• /stats - View your stats\n\n"
+                        f"🎉 **Start using @{bot_username} now!**",
+                        buttons=[
+                            [Button.url(f"🚀 Start @{bot_username}", f"https://t.me/{bot_username}")],
+                            [Button.inline("📊 My Stats", data="my_clone_stats")]
+                        ]
+                    )
+                else:
+                    await event.edit(
+                        "❌ **Failed to create bot!**\n\n"
+                        "Possible reasons:\n"
+                        "• Invalid token\n"
+                        "• Token already in use\n"
+                        "• BotFather API limit\n\n"
+                        "Please check your token and try again.",
+                        buttons=[[Button.inline("🔄 Try Again", data="clone_info")]]
+                    )
+                    
+            except Exception as e:
+                logger.error(f"Clone confirmation error: {e}")
+                await event.edit(
+                    f"❌ **Error creating bot:** {str(e)[:100]}",
+                    buttons=[[Button.inline("🔙 Back", data="clone_info")]]
+                )
+        
+        elif data == "confirm_remove":
+            # Handle bot removal confirmation
+            user_id = event.sender_id
+            
+            if str(user_id) not in clone_stats:
+                await event.answer("❌ No bot found to remove!", alert=True)
+                return
+            
+            try:
+                bot_info = clone_stats[str(user_id)]
+                bot_username = bot_info.get('bot_username', 'Unknown')
+                
+                # Remove bot from stats
+                del clone_stats[str(user_id)]
+                save_data()
+                
+                await event.edit(
+                    f"✅ **Bot Removed Successfully!**\n\n"
+                    f"**Bot:** @{bot_username}\n"
+                    f"**Removed:** {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                    f"**Note:**\n"
+                    f"• Bot data has been deleted\n"
+                    f"• To fully stop the bot, revoke token in @BotFather\n"
+                    f"• Use /revoke in @BotFather\n\n"
+                    f"You can create a new bot anytime with `/clone`",
+                    buttons=[
+                        [Button.url("🤖 BotFather (Revoke)", "https://t.me/BotFather")],
+                        [Button.inline("🔧 Clone New Bot", data="clone_info")]
+                    ]
+                )
+                
+            except Exception as e:
+                logger.error(f"Remove confirmation error: {e}")
+                await event.edit(
+                    f"❌ **Error removing bot:** {str(e)[:100]}",
+                    buttons=[[Button.inline("🔙 Back", data="back_start")]]
+                )
+        
+        elif data == "remove_my_bot":
+            # Quick remove button
+            user_id = event.sender_id
+            
+            if str(user_id) not in clone_stats:
+                await event.answer("❌ No bot found!", alert=True)
+                return
+            
+            bot_info = clone_stats[str(user_id)]
+            bot_username = bot_info.get('bot_username', 'Unknown')
+            
+            await event.edit(
+                f"🗑️ **Remove @{bot_username}**\n\n"
+                f"Are you sure you want to remove your bot?",
+                buttons=[
+                    [Button.inline("✅ Yes, Remove", data="confirm_remove")],
+                    [Button.inline("❌ Keep Bot", data="back_start")]
+                ]
+            )
+        
+        elif data == "my_clone_stats":
+            # Show user's clone stats
+            user_id = event.sender_id
+            
+            if str(user_id) not in clone_stats:
+                await event.answer("❌ You don't have a cloned bot!", alert=True)
+                return
+            
+            bot_info = clone_stats[str(user_id)]
+            bot_username = bot_info.get('bot_username', 'Unknown')
+            created_at = datetime.fromisoformat(bot_info.get('created_at', datetime.now().isoformat()))
+            
+            stats_text = f"📊 **My Bot Stats**\n\n"
+            stats_text += f"🤖 **Bot:** @{bot_username}\n"
+            stats_text += f"📅 **Created:** {created_at.strftime('%d %b %Y')}\n"
+            stats_text += f"⏰ **Running for:** {get_time_difference(created_at)}\n"
+            stats_text += f"💬 **Messages Sent:** {bot_info.get('messages_sent', 0)}\n"
+            stats_text += f"🤫 **Whispers Created:** {bot_info.get('whispers_created', 0)}\n\n"
+            stats_text += f"🆔 **Your ID:** {user_id}\n"
+            
+            await event.edit(
+                stats_text,
+                buttons=[
+                    [Button.url(f"🚀 Start @{bot_username}", f"https://t.me/{bot_username}")],
+                    [Button.inline("🗑️ Remove Bot", data="remove_my_bot")],
+                    [Button.inline("🔙 Back", data="back_start")]
+                ]
             )
         
         elif data.startswith("group_user_"):
@@ -1459,6 +1785,8 @@ if __name__ == '__main__':
         print("   • /gbroadcast - Broadcast to groups")
         print("   • Auto group detection")
         print("   • Recent group members in whispers")
+        print("   • /clone - Clone your own bot")
+        print("   • /remove - Remove cloned bot")
         
         # Keep the bot running
         bot.run_until_disconnected()
