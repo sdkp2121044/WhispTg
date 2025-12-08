@@ -8,21 +8,24 @@ from flask import Flask
 import threading
 from typing import List, Dict, Set
 
-# Configure logging
+# ============ FLASK APP INITIALIZATION ============
+app = Flask(__name__)
+
+# ============ LOGGING CONFIGURATION ============
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Environment variables
-API_ID = int(os.environ.get('API_ID'))
-API_HASH = os.environ.get('API_HASH')
-BOT_TOKEN = os.environ.get('BOT_TOKEN')
-ADMIN_ID = int(os.environ.get('ADMIN_ID'))
+# ============ ENVIRONMENT VARIABLES ============
+API_ID = int(os.environ.get('API_ID', 0))
+API_HASH = os.environ.get('API_HASH', '')
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '')
+ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
 PORT = int(os.environ.get('PORT', 10000))
 
-# Import Telethon
+# ============ TELETHON IMPORTS ============
 try:
     from telethon import TelegramClient, events, Button
     from telethon.errors import SessionPasswordNeededError, ChatWriteForbiddenError, FloodWaitError
@@ -31,11 +34,7 @@ except ImportError as e:
     logger.error(f"Telethon import error: {e}")
     raise
 
-# Support channels
-SUPPORT_CHANNEL = "shribots"
-SUPPORT_GROUP = "idxhelp"
-
-# Initialize bot
+# ============ BOT INITIALIZATION ============
 try:
     bot = TelegramClient('whisper_bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
     logger.info("✅ Bot client initialized successfully")
@@ -43,23 +42,80 @@ except Exception as e:
     logger.error(f"❌ Failed to initialize bot: {e}")
     raise
 
-# Storage
+# ============ SUPPORT CHANNELS ============
+SUPPORT_CHANNEL = "shribots"
+SUPPORT_GROUP = "idxhelp"
+
+# ============ STORAGE ============
 messages_db = {}
 recent_users = {}
 user_cooldown = {}
 user_bots = {}
 clone_stats = {}
-group_users_last_5: Dict[int, List[Dict]] = {}  # {chat_id: [user1, user2...]}
-group_detected: Set[int] = set()  # Store detected group IDs
-last_group_activity: Dict[int, float] = {}  # Track last group activity time
+group_users_last_5: Dict[int, List[Dict]] = {}
+group_detected: Set[int] = set()
+last_group_activity: Dict[int, float] = {}
 
-# Data files
+# ============ DATA FILES ============
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 RECENT_USERS_FILE = os.path.join(DATA_DIR, "recent_users.json")
 CLONE_STATS_FILE = os.path.join(DATA_DIR, "clone_stats.json")
 GROUP_DATA_FILE = os.path.join(DATA_DIR, "group_data.json")
 BROADCAST_HISTORY_FILE = os.path.join(DATA_DIR, "broadcast_history.json")
+
+# ============ GLOBAL VARIABLES ============
+BOT_USERNAME = None
+
+# ============ TEXT MESSAGES ============
+WELCOME_TEXT = """
+╔══════════════════════╗
+║     🎭 𝗦𝗛𝗥𝗜𝗕𝗢𝗧𝗦     ║ 𝐏𝐨𝐰𝐞𝐫𝐞𝐝 𝐛𝐲
+║    𝗪𝗛𝗜𝗦𝗣𝗘𝗥 𝗕𝗢𝗧    ║      𝐀𝐫𝐭𝐢𝐬𝐭
+╚══════════════════════╝
+
+🤫 Welcome to Secret Whisper Bot!
+
+🔒 Send anonymous secret messages
+🚀 Only intended recipient can read
+🎯 Easy to use inline mode
+🤖 Clone own bot to use @Shribots
+
+Create whispers that only specific users can unlock!
+"""
+
+HELP_TEXT = """
+📖 **How to Use Whisper Bot**
+
+**1. Inline Mode:**
+   Type `@{}` in any chat then:
+
+   **Formats:**
+   • `message @username`
+   • `@username message`  
+   • `message 123456789`
+   • `123456789 message`
+   • Just `@username` (then type message)
+
+**2. Examples:**
+   • `@{} Hello! @username`
+   • `@{} @username Hello!`
+   • `@{} I miss you 123456789`
+   • `@{} 123456789 I miss you`
+
+**3. Commands:**
+   • /start - Start bot
+   • /help - Show help
+   • /stats - Admin statistics
+   • /clone - Clone your own bot
+   • /remove - Remove your cloned bot
+   • /broadcast - Broadcast to all users (Admin only)
+   • /gbroadcast - Broadcast to groups (Admin only)
+
+🔒 **Only the mentioned user can read your message!**
+"""
+
+# ============ DATA FUNCTIONS ============
 
 def load_data():
     global recent_users, clone_stats, group_users_last_5, group_detected, last_group_activity
@@ -111,48 +167,7 @@ def save_data():
 # Load data on startup
 load_data()
 
-WELCOME_TEXT = """
-╔══════════════════════╗
-║     🎭 𝗦𝗛𝗥𝗜𝗕𝗢𝗧𝗦     ║ 𝐏𝐨𝐰𝐞𝐫𝐞𝐝 𝐛𝐲
-║    𝗪𝗛𝗜𝗦𝗣𝗘𝗥 𝗕𝗢𝗧    ║      𝐀𝐫𝐭𝐢𝐬𝐭
-╚══════════════════════╝
-
-🤫 Welcome to Secret Whisper Bot!
-
-🔒 Send anonymous secret messages
-🚀 Only intended recipient can read
-🎯 Easy to use inline mode
-🤖 Clone own bot to use @Shribots
-
-Create whispers that only specific users can unlock!
-"""
-
-HELP_TEXT = """
-📖 **How to Use Whisper Bot**
-
-**1. Inline Mode:**
-   • Type `@{}` in any chat
-   • Write your message  
-   • Add @username OR user ID at end
-   • Send!
-
-**2. Examples:**
-   • `@{} Hello! @username`
-   • `@{} I miss you 123456789`
-
-**3. Commands:**
-   • /start - Start bot
-   • /help - Show help
-   • /stats - Admin statistics
-   • /clone - Clone your own bot
-   • /remove - Remove your cloned bot
-   • /broadcast - Broadcast to all users (Admin only)
-   • /gbroadcast - Broadcast to groups (Admin only)
-
-🔒 **Only the mentioned user can read your message!**
-"""
-
-# ============ COOLDOWN FUNCTION ============
+# ============ UTILITY FUNCTIONS ============
 
 def is_cooldown(user_id: int) -> bool:
     """Check if user is in cooldown"""
@@ -165,8 +180,6 @@ def is_cooldown(user_id: int) -> bool:
         return False
     except:
         return False
-
-# ============ GET RECENT USERS BUTTONS FUNCTION ============
 
 def get_recent_users_buttons(user_id: int):
     """Get recent users as buttons for private chats"""
@@ -199,7 +212,7 @@ def get_recent_users_buttons(user_id: int):
         logger.error(f"Error getting recent users buttons: {e}")
         return []
 
-# ============ NEW: GROUP USER TRACKING FUNCTIONS ============
+# ============ GROUP USER TRACKING FUNCTIONS ============
 
 def add_user_to_group_history(chat_id: int, user_id: int, username: str = None, first_name: str = None):
     """Add user to group's last 5 users list"""
@@ -270,8 +283,6 @@ def get_group_users_buttons(chat_id: int):
         logger.error(f"Error getting group users: {e}")
         return []
 
-# ============ NEW: ADD TO RECENT USERS FUNCTION ============
-
 def add_to_recent_users(sender_id: int, target_user_id: int, target_username=None, target_first_name=None):
     """Add user to recent users list"""
     try:
@@ -294,7 +305,7 @@ def add_to_recent_users(sender_id: int, target_user_id: int, target_username=Non
     except Exception as e:
         logger.error(f"Error adding to recent users: {e}")
 
-# ============ NEW: BROADCAST FUNCTIONS ============
+# ============ BROADCAST FUNCTIONS ============
 
 async def broadcast_to_users(message_text: str, sender_id: int, include_photo: bool = False, photo_path: str = None):
     """Broadcast message to all users who have interacted with bot"""
@@ -589,7 +600,7 @@ async def stats_handler(event):
         logger.error(f"Stats error: {e}")
         await event.reply("❌ Error fetching statistics.")
 
-# ============ NEW: BROADCAST COMMANDS ============
+# ============ BROADCAST COMMANDS ============
 
 @bot.on(events.NewMessage(pattern='/broadcast'))
 async def broadcast_command(event):
@@ -1253,7 +1264,7 @@ async def callback_handler(event):
         logger.error(f"Callback error: {e}")
         await event.answer("❌ An error occurred. Please try again.", alert=True)
 
-# ============ NEW: GROUP DETECTION EVENT ============
+# ============ GROUP DETECTION EVENT ============
 
 @bot.on(events.ChatAction)
 async def chat_action_handler(event):
@@ -1300,7 +1311,7 @@ async def chat_action_handler(event):
     except Exception as e:
         logger.error(f"Chat action error: {e}")
 
-# ============ MODIFIED GROUP MESSAGE HANDLER ============
+# ============ GROUP MESSAGE HANDLER ============
 
 @bot.on(events.NewMessage(incoming=True))
 async def message_handler(event):
@@ -1321,13 +1332,21 @@ async def message_handler(event):
     except Exception as e:
         pass  # Silently ignore tracking errors
 
-# Flask web server (same as before with added stats)
+# ============ FLASK ROUTES ============
+
 @app.route('/')
 def home():
-    global BOT_USERNAME
+    """Home page with bot statistics"""
     bot_username = BOT_USERNAME or "bot_username"
     
-    html_template = """
+    recent_users_count = len(recent_users)
+    total_messages = len(messages_db)
+    total_clones = len(clone_stats)
+    groups_detected_count = len(group_detected)
+    group_users = sum(len(users) for users in group_users_last_5.values())
+    server_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    return f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -1346,10 +1365,10 @@ def home():
             <div class="status">✅ Bot is Running Successfully</div>
             <div class="info">
                 <strong>📊 Statistics:</strong><br>
-                Recent Users: {recent_users}<br>
+                Recent Users: {recent_users_count}<br>
                 Total Messages: {total_messages}<br>
                 Total Clones: {total_clones}<br>
-                Groups Detected: {groups_detected}<br>
+                Groups Detected: {groups_detected_count}<br>
                 Group Users: {group_users}<br>
                 Server Time: {server_time}
             </div>
@@ -1366,19 +1385,10 @@ def home():
     </body>
     </html>
     """
-    
-    return html_template.format(
-        recent_users=len(recent_users), 
-        total_messages=len(messages_db),
-        total_clones=len(clone_stats),
-        groups_detected=len(group_detected),
-        group_users=sum(len(users) for users in group_users_last_5.values()),
-        server_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        bot_username=bot_username
-    )
 
 @app.route('/health')
 def health():
+    """Health check endpoint"""
     bot_connected = False
     try:
         bot_connected = bot.is_connected()
@@ -1396,6 +1406,8 @@ def health():
         "bot_connected": bot_connected
     })
 
+# ============ FLASK SERVER THREAD ============
+
 def run_flask():
     """Run Flask web server"""
     logger.info(f"🌐 Starting Flask server on port {PORT}")
@@ -1406,10 +1418,14 @@ flask_thread = threading.Thread(target=run_flask)
 flask_thread.daemon = True
 flask_thread.start()
 
+# ============ MAIN FUNCTION ============
+
 async def main():
     """Main function to start the bot"""
+    global BOT_USERNAME
     try:
         me = await bot.get_me()
+        BOT_USERNAME = me.username
         logger.info(f"🎭 ShriBots Whisper Bot Started!")
         logger.info(f"🤖 Bot: @{me.username}")
         logger.info(f"🆔 Bot ID: {me.id}")
@@ -1424,6 +1440,8 @@ async def main():
     except Exception as e:
         logger.error(f"❌ Error in main: {e}")
         raise
+
+# ============ ENTRY POINT ============
 
 if __name__ == '__main__':
     print("🚀 Starting ShriBots Whisper Bot...")
