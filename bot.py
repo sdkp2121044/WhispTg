@@ -1322,35 +1322,22 @@ async def message_handler(event):
         pass  # Silently ignore tracking errors
 
 # Flask web server (same as before with added stats)
-app = Flask(__name__)
-
 @app.route('/')
 def home():
-    # Get bot username synchronously
-    bot_username = "bot_username"
-    try:
-        if bot.is_connected():
-            # We need to run this in the bot's event loop
-            import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            me = loop.run_until_complete(bot.get_me())
-            bot_username = me.username
-            loop.close()
-    except:
-        pass
+    global BOT_USERNAME
+    bot_username = BOT_USERNAME or "bot_username"
     
-    return """
+    html_template = """
     <!DOCTYPE html>
     <html>
     <head>
         <title>ShriBots Whisper Bot</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
-            .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-            h1 { color: #333; text-align: center; }
-            .status { background: #4CAF50; color: white; padding: 10px; border-radius: 5px; text-align: center; margin: 20px 0; }
-            .info { background: #2196F3; color: white; padding: 15px; border-radius: 5px; margin: 10px 0; }
+            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
+            .container {{ max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+            h1 {{ color: #333; text-align: center; }}
+            .status {{ background: #4CAF50; color: white; padding: 10px; border-radius: 5px; text-align: center; margin: 20px 0; }}
+            .info {{ background: #2196F3; color: white; padding: 15px; border-radius: 5px; margin: 10px 0; }}
         </style>
     </head>
     <body>
@@ -1359,12 +1346,12 @@ def home():
             <div class="status">✅ Bot is Running Successfully</div>
             <div class="info">
                 <strong>📊 Statistics:</strong><br>
-                Recent Users: {}<br>
-                Total Messages: {}<br>
-                Total Clones: {}<br>
-                Groups Detected: {}<br>
-                Group Users: {}<br>
-                Server Time: {}
+                Recent Users: {recent_users}<br>
+                Total Messages: {total_messages}<br>
+                Total Clones: {total_clones}<br>
+                Groups Detected: {groups_detected}<br>
+                Group Users: {group_users}<br>
+                Server Time: {server_time}
             </div>
             <p>This bot allows you to send anonymous secret messages to Telegram users.</p>
             <p><strong>New Features:</strong></p>
@@ -1374,18 +1361,20 @@ def home():
                 <li>🤖 Auto-detect when added to groups</li>
                 <li>👤 Show recent group members in whispers</li>
             </ul>
-            <p><strong>Usage:</strong> Use inline mode in any chat: <code>@{} your_message @username</code></p>
+            <p><strong>Usage:</strong> Use inline mode in any chat: <code>@{bot_username} your_message @username</code></p>
         </div>
     </body>
     </html>
-    """.format(
-        len(recent_users), 
-        len(messages_db),
-        len(clone_stats),
-        len(group_detected),
-        sum(len(users) for users in group_users_last_5.values()),
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        bot_username
+    """
+    
+    return html_template.format(
+        recent_users=len(recent_users), 
+        total_messages=len(messages_db),
+        total_clones=len(clone_stats),
+        groups_detected=len(group_detected),
+        group_users=sum(len(users) for users in group_users_last_5.values()),
+        server_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        bot_username=bot_username
     )
 
 @app.route('/health')
