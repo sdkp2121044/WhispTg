@@ -194,7 +194,8 @@ async def create_cloned_bot(user_id: int, token: str):
         logger.info(f"🔄 Creating cloned bot for user {user_id}")
         
         # Try to get bot info to verify token
-        temp_client = TelegramClient(f'clone_{user_id}_{int(datetime.now().timestamp())}', API_ID, API_HASH)
+        session_name = f'clone_{user_id}_{int(datetime.now().timestamp())}'
+        temp_client = TelegramClient(session_name, API_ID, API_HASH)
         await temp_client.start(bot_token=token)
         me = await temp_client.get_me()
         bot_username = me.username
@@ -1344,18 +1345,19 @@ async def callback_handler(event):
                 buttons=[[Button.inline("🔙 Back", data="broadcast_menu")]]
             )
         
-                elif data.startswith("confirm_clone:"):
+        elif data.startswith("confirm_clone:"):
             # Handle bot cloning confirmation
             token = data.replace("confirm_clone:", "")
             user_id = event.sender_id
             
-            # First delete the old message to avoid edit error
-            try:
-                await event.delete()
-            except:
-                pass
+            await event.answer("🔄 Creating your bot...", alert=False)
             
-            # Send new message instead of editing
+            # First edit the message to show processing
+            try:
+                await event.edit("🔄 **Creating your bot...**\n\nPlease wait...")
+            except:
+                pass  # Ignore if can't edit
+            
             try:
                 # Create cloned bot
                 bot_username = await create_cloned_bot(user_id, token)
@@ -1372,7 +1374,7 @@ async def callback_handler(event):
                     }
                     save_data()
                     
-                    success_message = (
+                    success_text = (
                         f"✅ **Bot Successfully Created!**\n\n"
                         f"**Your Bot:** @{bot_username}\n"
                         f"**Token:** `{token[:10]}...`\n"
@@ -1387,15 +1389,15 @@ async def callback_handler(event):
                         f"🎉 **Start using @{bot_username} now!**"
                     )
                     
-                    await event.respond(
-                        success_message,
+                    await event.edit(
+                        success_text,
                         buttons=[
                             [Button.url(f"🚀 Start @{bot_username}", f"https://t.me/{bot_username}")],
                             [Button.inline("📊 My Stats", data="my_clone_stats")]
                         ]
                     )
                 else:
-                    error_message = (
+                    error_text = (
                         "❌ **Failed to create bot!**\n\n"
                         "Possible reasons:\n"
                         "• Invalid token\n"
@@ -1404,16 +1406,16 @@ async def callback_handler(event):
                         "Please check your token and try again."
                     )
                     
-                    await event.respond(
-                        error_message,
+                    await event.edit(
+                        error_text,
                         buttons=[[Button.inline("🔄 Try Again", data="clone_info")]]
                     )
-                    
+                        
             except Exception as e:
                 logger.error(f"Clone confirmation error: {e}")
-                error_msg = f"❌ **Error creating bot:** {str(e)[:100]}"
-                await event.respond(
-                    error_msg,
+                error_text = f"❌ **Error creating bot:** {str(e)[:100]}"
+                await event.edit(
+                    error_text,
                     buttons=[[Button.inline("🔙 Back", data="clone_info")]]
                 )
         
@@ -1719,6 +1721,7 @@ def home():
                 <li>👥 Broadcast to groups (/gbroadcast)</li>
                 <li>🤖 Auto-detect when added to groups</li>
                 <li>👤 Show recent group members in whispers</li>
+                <li>🔧 Clone your own bot (/clone)</li>
             </ul>
             <p><strong>Usage:</strong> Use inline mode in any chat: <code>@{bot_username} your_message @username</code></p>
         </div>
@@ -1776,7 +1779,7 @@ async def main():
         logger.info(f"🌐 Web server running on port {PORT}")
         logger.info("✅ Bot is ready and working!")
         logger.info("🔗 Use /start to begin")
-        logger.info("📢 New: Broadcast features added for admin!")
+        logger.info("📢 Features: Whisper, Broadcast, Clone bot, Group tracking")
     except Exception as e:
         logger.error(f"❌ Error in main: {e}")
         raise
@@ -1794,13 +1797,15 @@ if __name__ == '__main__':
         
         print("✅ Bot started successfully!")
         print("🔄 Bot is now running...")
-        print("📢 New Features Added:")
-        print("   • /broadcast - Broadcast to all users")
-        print("   • /gbroadcast - Broadcast to groups")
-        print("   • Auto group detection")
-        print("   • Recent group members in whispers")
+        print("📢 Features Available:")
+        print("   • /start - Start bot")
+        print("   • /help - Show help")
         print("   • /clone - Clone your own bot")
         print("   • /remove - Remove cloned bot")
+        print("   • /broadcast - Broadcast to all users (Admin)")
+        print("   • /gbroadcast - Broadcast to groups (Admin)")
+        print("   • /stats - Admin statistics")
+        print("   • Inline mode - @bot_username message @username")
         
         # Keep the bot running
         bot.run_until_disconnected()
