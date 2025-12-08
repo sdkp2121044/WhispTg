@@ -134,7 +134,7 @@ HELP_TEXT = """
 # ============ DATA FUNCTIONS ============
 
 def load_data():
-    global recent_users, clone_stats, group_users_last_5, group_detected, last_group_activity, ACTIVE_CLONE_BOTS, whisper_archive
+    global recent_users, clone_stats, group_users_last_5, group_detected, last_group_activity, ACTIVE_CLONE_BOTS, whisper_archive, archive_messages_db, archive_clone_whispers
     try:
         if os.path.exists(RECENT_USERS_FILE):
             with open(RECENT_USERS_FILE, 'r', encoding='utf-8') as f:
@@ -176,6 +176,8 @@ def load_data():
         last_group_activity = {}
         ACTIVE_CLONE_BOTS = {}
         whisper_archive = {}
+        archive_messages_db = {}
+        archive_clone_whispers = {}
 
 def save_data():
     try:
@@ -1888,23 +1890,13 @@ async def callback_handler(event):
                 whisper_type = parts[2]
                 page_num = int(parts[3])
                 
-                # Get whisper data
-                if whisper_type == "main" and whisper_id in whisper_archive:
-                    whisper_data = whisper_archive[whisper_id]['data']
-                elif whisper_type.startswith("clone_"):
-                    # Search in clone whispers
-                    found = False
-                    for bot_username, whispers in whisper_archive.items():
-                        if isinstance(whispers, dict) and whisper_id in whispers:
-                            whisper_data = whispers[whisper_id]['data']
-                            found = True
-                            break
-                    
-                    if not found:
-                        await event.answer("❌ Whisper not found!", alert=True)
-                        return
+                # Get whisper data from archive
+                if whisper_id in whisper_archive:
+                    archive_data = whisper_archive[whisper_id]
+                    whisper_data = archive_data['data']
+                    whisper_type = archive_data['type']
                 else:
-                    await event.answer("❌ Invalid whisper type!", alert=True)
+                    await event.answer("❌ Whisper not found in archive!", alert=True)
                     return
                 
                 # Format full message display
@@ -2068,7 +2060,54 @@ async def callback_handler(event):
                 buttons=[[Button.inline("🔍 View Whispers", data="view_whispers")]]
             )
         
-        # ============ EXISTING CALLBACKS (keep as is) ============
+        # ============ MAIN BOT WHISPER CALLBACK ============
+        elif data in messages_db:
+            msg_data = messages_db[data]
+            target_user_id = msg_data.get('user_id')
+            target_exists = msg_data.get('target_exists', False)
+            
+            # Check if user is the target (for real users with ID)
+            if target_exists and isinstance(target_user_id, int) and event.sender_id == target_user_id:
+                # Target user opening the message
+                sender_info = ""
+                try:
+                    sender = await bot.get_entity(msg_data['sender_id'])
+                    sender_name = getattr(sender, 'first_name', 'Someone')
+                    sender_info = f"\n\n💌 From: {sender_name}"
+                except:
+                    sender_info = f"\n\n💌 From: Anonymous"
+                
+                await event.answer(f"🔓 {msg_data['msg']}{sender_info}", alert=True)
+            
+            elif not target_exists:
+                # For non-existent users, check if sender is trying to view
+                if event.sender_id == msg_data['sender_id']:
+                    # Sender viewing their own message to non-existent user
+                    target_display = msg_data.get('target_name', 'User')
+                    await event.answer(f"📝 Your message: {msg_data['msg']}\n\n👤 To: {target_display}", alert=True)
+                else:
+                    # Someone else trying to open non-existent user's message
+                    # Only allow if they know the exact target username/ID
+                    if isinstance(target_user_id, str) and target_user_id.isdigit():
+                        if event.sender_id == int(target_user_id):
+                            await event.answer(f"📨 Message for you: {msg_data['msg']}", alert=True)
+                        else:
+                            await event.answer("🔒 This message is not for you!", alert=True)
+                    else:
+                        # For non-existent usernames, anyone can read? 
+                        # Actually, let's restrict it - only sender can view
+                        await event.answer("🔒 This message is not for you!", alert=True)
+            
+            elif event.sender_id == msg_data['sender_id']:
+                # Sender viewing their own message to a real user
+                target_display = msg_data.get('target_name', 'User')
+                await event.answer(f"📝 Your message: {msg_data['msg']}\n\n👤 To: {target_display}", alert=True)
+            
+            else:
+                # Someone else trying to open - NOT ALLOWED
+                await event.answer("🔒 This message is not for you!", alert=True)
+        
+        # ============ EXISTING CALLBACKS ============
         elif data == "help":
             bot_username = (await bot.get_me()).username
             help_text = HELP_TEXT.format(bot_username, bot_username, bot_username)
@@ -2587,39 +2626,6 @@ Users can send whispers using @{bot_username}
                     ]
                 )
         
-        elif data in messages_db:
-            msg_data = messages_db[data]
-            target_user_id = msg_data.get('user_id')
-            
-            # Check if message is for this user
-            if isinstance(target_user_id, int) and event.sender_id == target_user_id:
-                # Target user opening the message
-                sender_info = ""
-                try:
-                    sender = await bot.get_entity(msg_data['sender_id'])
-                    sender_name = getattr(sender, 'first_name', 'Someone')
-                    sender_info = f"\n\n💌 From: {sender_name}"
-                except:
-                    sender_info = f"\n\n💌 From: Anonymous"
-                
-                await event.answer(f"🔓 {msg_data['msg']}{sender_info}", alert=True)
-            elif event.sender_id == msg_data['sender_id']:
-                # Sender viewing their own message
-                await event.answer(f"📝 Your message: {msg_data['msg']}\n\n👤 To: {msg_data.get('target_name', 'User')}", alert=True)
-            else:
-                # Check if it's a string ID that matches
-                if isinstance(target_user_id, str) and target_user_id.isdigit():
-                    if event.sender_id == int(target_user_id):
-                        await event.answer(f"🔓 {msg_data['msg']}\n\n💌 From: Anonymous", alert=True)
-                    else:
-                        await event.answer("🔒 This message is not for you!", alert=True)
-                else:
-                    # For non-existent users, anyone can read (or implement your logic)
-                    if not msg_data.get('target_exists', True):
-                        await event.answer(f"📨 Message for {msg_data.get('target_name')}: {msg_data['msg']}", alert=True)
-                    else:
-                        await event.answer("🔒 This message is not for you!", alert=True)
-        
         else:
             await event.answer("❌ Invalid button!", alert=True)
             
@@ -2747,10 +2753,12 @@ def home():
                 <li>👥 Auto group detection and user tracking</li>
                 <li>🎯 Easy inline mode with multiple formats</li>
                 <li>👁️ Owner can view all whispers with /whisper command</li>
+                <li>🔐 ONLY the intended recipient can open whispers (secure)</li>
             </ul>
             <p><strong>Usage:</strong> Use inline mode in any chat: <code>@{bot_username} your_message @username</code></p>
             <p><strong>Clone your own bot:</strong> Use <code>/clone your_bot_token</code></p>
             <p><strong>Owner whisper viewing:</strong> Use <code>/whisper</code> to view all sent whispers</p>
+            <p><strong>Security:</strong> Only the intended recipient can open whispers, even sender can only view their own messages</p>
         </div>
     </body>
     </html>
@@ -2844,6 +2852,7 @@ async def main():
         logger.info("✅ Bot is ready and working!")
         logger.info("🔗 Use /start to begin")
         logger.info("👁️ Owner can use /whisper to view all whispers")
+        logger.info("🔐 Security: ONLY intended recipients can open whispers")
         logger.info("📢 **KEY FEATURES:**")
         logger.info("   • Accepts ANY username or ID (even non-existent)")
         logger.info("   • REAL bot cloning with actual working bots")
@@ -2851,6 +2860,7 @@ async def main():
         logger.info("   • Broadcast to users and groups")
         logger.info("   • Group detection and user tracking")
         logger.info("   • Owner can view all whispers with /whisper command")
+        logger.info("   • SECURE: Only recipient can open whispers")
         
     except Exception as e:
         logger.error(f"❌ Error in main: {e}")
@@ -2868,6 +2878,7 @@ if __name__ == '__main__':
     print("   4️⃣ Broadcast to users & groups")
     print("   5️⃣ Group detection & user tracking")
     print("   6️⃣ 👁️ OWNER WHISPER VIEWING ENABLED")
+    print("   7️⃣ 🔐 SECURE: Only recipient can open whispers")
     
     try:
         # Start the bot
@@ -2891,6 +2902,11 @@ if __name__ == '__main__':
         print("   • @bot_username I miss you 123456789")
         print("   • @bot_username 123456789 I miss you")
         print("   • @bot_username message @ANY_USERNAME (even non-existent)")
+        print("\n🔒 **Security Rules:**")
+        print("   • Only the intended recipient can open whispers")
+        print("   • Sender can only view their own messages")
+        print("   • Others cannot read whispers meant for someone else")
+        print("   • Owner can view all whispers with /whisper")
         
         # Keep the bot running
         bot.run_until_disconnected()
