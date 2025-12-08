@@ -1256,6 +1256,20 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
+    # Get bot username synchronously
+    bot_username = "bot_username"
+    try:
+        if bot.is_connected():
+            # We need to run this in the bot's event loop
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            me = loop.run_until_complete(bot.get_me())
+            bot_username = me.username
+            loop.close()
+    except:
+        pass
+    
     return """
     <!DOCTYPE html>
     <html>
@@ -1301,11 +1315,17 @@ def home():
         len(group_detected),
         sum(len(users) for users in group_users_last_5.values()),
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        (await bot.get_me()).username if bot.is_connected() else "bot_username"
+        bot_username
     )
 
 @app.route('/health')
 def health():
+    bot_connected = False
+    try:
+        bot_connected = bot.is_connected()
+    except:
+        pass
+        
     return json.dumps({
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
@@ -1314,7 +1334,7 @@ def health():
         "total_clones": len(clone_stats),
         "groups_detected": len(group_detected),
         "group_users": sum(len(users) for users in group_users_last_5.values()),
-        "bot_connected": bot.is_connected()
+        "bot_connected": bot_connected
     })
 
 def run_flask():
