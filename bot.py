@@ -21,6 +21,7 @@ API_HASH = os.environ.get('API_HASH')
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_ID = int(os.environ.get('ADMIN_ID'))
 PORT = int(os.environ.get('PORT', 10000))
+
 # Import Telethon
 try:
     from telethon import TelegramClient, events, Button
@@ -151,6 +152,53 @@ HELP_TEXT = """
 🔒 **Only the mentioned user can read your message!**
 """
 
+# ============ COOLDOWN FUNCTION ============
+
+def is_cooldown(user_id: int) -> bool:
+    """Check if user is in cooldown"""
+    try:
+        current_time = datetime.now().timestamp()
+        if user_id in user_cooldown:
+            if current_time - user_cooldown[user_id] < 2:  # 2 seconds cooldown
+                return True
+        user_cooldown[user_id] = current_time
+        return False
+    except:
+        return False
+
+# ============ GET RECENT USERS BUTTONS FUNCTION ============
+
+def get_recent_users_buttons(user_id: int):
+    """Get recent users as buttons for private chats"""
+    try:
+        if not recent_users:
+            return []
+        
+        buttons = []
+        # Get last 10 recent users
+        for user_key, user_data in list(recent_users.items())[:10]:
+            target_user_id = user_data.get('user_id')
+            username = user_data.get('username')
+            first_name = user_data.get('first_name', 'User')
+            
+            if username:
+                display_text = f"@{username}"
+            else:
+                display_text = f"{first_name} (ID: {target_user_id})"
+            
+            if len(display_text) > 15:
+                display_text = display_text[:15] + "..."
+            
+            buttons.append([Button.inline(
+                f"👤 {display_text}", 
+                data=f"recent_{user_key}"
+            )])
+        
+        return buttons
+    except Exception as e:
+        logger.error(f"Error getting recent users buttons: {e}")
+        return []
+
 # ============ NEW: GROUP USER TRACKING FUNCTIONS ============
 
 def add_user_to_group_history(chat_id: int, user_id: int, username: str = None, first_name: str = None):
@@ -221,6 +269,30 @@ def get_group_users_buttons(chat_id: int):
     except Exception as e:
         logger.error(f"Error getting group users: {e}")
         return []
+
+# ============ NEW: ADD TO RECENT USERS FUNCTION ============
+
+def add_to_recent_users(sender_id: int, target_user_id: int, target_username=None, target_first_name=None):
+    """Add user to recent users list"""
+    try:
+        user_key = f"{sender_id}_{target_user_id}"
+        recent_users[user_key] = {
+            'user_id': target_user_id,
+            'username': target_username,
+            'first_name': target_first_name,
+            'sender_id': sender_id,
+            'last_used': datetime.now().isoformat()
+        }
+        
+        # Keep only last 50 entries
+        if len(recent_users) > 50:
+            # Remove oldest
+            oldest_key = min(recent_users.keys(), key=lambda k: recent_users[k]['last_used'])
+            del recent_users[oldest_key]
+        
+        save_data()
+    except Exception as e:
+        logger.error(f"Error adding to recent users: {e}")
 
 # ============ NEW: BROADCAST FUNCTIONS ============
 
@@ -412,27 +484,7 @@ def save_broadcast_history(broadcast_type: str, sender_id: int, message: str, to
     except Exception as e:
         logger.error(f"Error saving broadcast history: {e}")
 
-# ============ MODIFIED EXISTING FUNCTIONS ============
-
-def add_to_recent_users(user_id, target_user_id, target_username=None, target_first_name=None):
-    """Add user to recent users list"""
-    try:
-        user_key = str(target_user_id)
-        recent_users[user_key] = {
-            'user_id': target_user_id,
-            'username': target_username,
-            'first_name': target_first_name,
-            'last_used': datetime.now().isoformat()
-        }
-        
-        # Keep only last 10 users
-        if len(recent_users) > 10:
-            oldest_key = min(recent_users.keys(), key=lambda k: recent_users[k]['last_used'])
-            del recent_users[oldest_key]
-        
-        save_data()
-    except Exception as e:
-        logger.error(f"Error adding to recent users: {e}")
+# ============ COMMAND HANDLERS ============
 
 @bot.on(events.NewMessage(pattern='/start'))
 async def start_handler(event):
@@ -583,7 +635,7 @@ async def broadcast_command(event):
         await event.reply(
             confirm_text,
             buttons=[
-                [Button.inline("✅ Yes, Broadcast", data=f"confirm_user_broadcast")],
+                [Button.inline("✅ Yes, Broadcast", data=f"confirm_user_broadcast:{message_text[:1000]}")],
                 [Button.inline("❌ Cancel", data="back_start")]
             ]
         )
@@ -638,7 +690,7 @@ async def gbroadcast_command(event):
         await event.reply(
             confirm_text,
             buttons=[
-                [Button.inline("✅ Yes, Broadcast", data=f"confirm_group_broadcast")],
+                [Button.inline("✅ Yes, Broadcast", data=f"confirm_group_broadcast:{message_text[:1000]}")],
                 [Button.inline("❌ Cancel", data="back_start")]
             ]
         )
@@ -647,28 +699,28 @@ async def gbroadcast_command(event):
         logger.error(f"Group broadcast command error: {e}")
         await event.reply(f"❌ Error: {str(e)}")
 
-# ============ MODIFIED INLINE HANDLER FOR GROUPS ============
+# ============ INLINE QUERY HANDLER ============
 
-async def handle_inline_query(event, client=None):
-    """Handle inline queries with group support"""
-    if client is None:
-        client = bot
-    
+@bot.on(events.InlineQuery)
+async def inline_handler(event):
+    """Handle inline queries"""
     try:
         if is_cooldown(event.sender_id):
             await event.answer([])
             return
 
         # Check if in group
-        is_group_context = event.query.chat_type in ['group', 'supergroup']
+        is_group_context = hasattr(event.query, 'chat_type') and event.query.chat_type in ['group', 'supergroup']
         recent_buttons = []
         
-        if is_group_context and event.chat_id in group_users_last_5:
+        if is_group_context and hasattr(event, 'chat_id') and event.chat_id in group_users_last_5:
             recent_buttons = get_group_users_buttons(event.chat_id)
         else:
             recent_buttons = get_recent_users_buttons(event.sender_id)
         
-        if not event.text or not event.text.strip():
+        query_text = event.text or ""
+        
+        if not query_text.strip():
             if recent_buttons:
                 if is_group_context:
                     result_text = "**Recent Group Members:**\nClick any user below to whisper them!\n\nOr type: `message @username`"
@@ -691,7 +743,7 @@ async def handle_inline_query(event, client=None):
             await event.answer([result])
             return
         
-        text = event.text.strip()
+        text = query_text.strip()
         
         # If user clicked group user button, it will come as data, handle separately
         patterns = [r'@(\w+)$', r'(\d+)$']
@@ -730,7 +782,7 @@ async def handle_inline_query(event, client=None):
         
         try:
             if target_user.isdigit():
-                user_obj = await client.get_entity(int(target_user))
+                user_obj = await bot.get_entity(int(target_user))
             else:
                 if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]{3,30}$', target_user):
                     result = event.builder.article(
@@ -741,7 +793,7 @@ async def handle_inline_query(event, client=None):
                     await event.answer([result])
                     return
                 
-                user_obj = await client.get_entity(target_user)
+                user_obj = await bot.get_entity(target_user)
             
             if not hasattr(user_obj, 'first_name'):
                 result = event.builder.article(
@@ -753,7 +805,7 @@ async def handle_inline_query(event, client=None):
                 return
             
             # Add to appropriate recent list
-            if is_group_context:
+            if is_group_context and hasattr(event, 'chat_id'):
                 # Update group user history
                 chat_id = event.chat_id
                 add_user_to_group_history(
@@ -788,7 +840,7 @@ async def handle_inline_query(event, client=None):
             'timestamp': datetime.now().isoformat(),
             'target_name': getattr(user_obj, 'first_name', 'User'),
             'is_group': is_group_context,
-            'group_id': event.chat_id if is_group_context else None
+            'group_id': event.chat_id if hasattr(event, 'chat_id') and is_group_context else None
         }
         
         target_name = getattr(user_obj, 'first_name', 'User')
@@ -796,7 +848,7 @@ async def handle_inline_query(event, client=None):
             title=f"🔒 Secret Message for {target_name}",
             description=f"Click to send secret message",
             text=f"**🔐 A secret message for {target_name}!**\n\n*Note: Only {target_name} can open this message.*",
-            buttons=[[Button.inline("🔓 Show Message", message_id)]]
+            buttons=[[Button.inline("🔓 Show Message", data=message_id)]]
         )
         
         await event.answer([result])
@@ -810,7 +862,7 @@ async def handle_inline_query(event, client=None):
         )
         await event.answer([result])
 
-# ============ MODIFIED CALLBACK HANDLER ============
+# ============ CALLBACK QUERY HANDLER ============
 
 @bot.on(events.CallbackQuery)
 async def callback_handler(event):
@@ -993,39 +1045,42 @@ async def callback_handler(event):
                 ]
             )
         
-        elif data == "confirm_user_broadcast":
+        elif data.startswith("confirm_user_broadcast:"):
             if event.sender_id != ADMIN_ID:
                 await event.answer("❌ Admin only!", alert=True)
                 return
-                
-            # Get the message from previous context
-            # For simplicity, we'll ask user to send message again
+            
+            message_text = data.replace("confirm_user_broadcast:", "")
+            await event.answer("📢 Starting user broadcast...", alert=False)
+            
+            success, failed = await broadcast_to_users(message_text, event.sender_id)
+            
             await event.edit(
-                "👤 **User Broadcast Setup**\n\n"
-                "Please send the broadcast message now.\n"
-                "You can use text, photos, or any media.\n\n"
-                "**Format:** `/broadcast your message`\n"
-                "**Or reply:** Reply to a message with `/broadcast`",
-                buttons=[
-                    [Button.inline("🔙 Cancel", data="broadcast_menu")]
-                ]
+                f"✅ **User Broadcast Completed**\n\n"
+                f"📊 Total Users: {success + failed}\n"
+                f"✅ Success: {success}\n"
+                f"❌ Failed: {failed}\n"
+                f"📈 Success Rate: {int(success/(success+failed)*100) if (success+failed) > 0 else 0}%",
+                buttons=[[Button.inline("🔙 Back", data="broadcast_menu")]]
             )
         
-        elif data == "confirm_group_broadcast":
+        elif data.startswith("confirm_group_broadcast:"):
             if event.sender_id != ADMIN_ID:
                 await event.answer("❌ Admin only!", alert=True)
                 return
-                
+            
+            message_text = data.replace("confirm_group_broadcast:", "")
+            await event.answer("📢 Starting group broadcast...", alert=False)
+            
+            success, failed = await broadcast_to_groups(message_text, event.sender_id)
+            
             await event.edit(
-                f"👥 **Group Broadcast Setup**\n\n"
-                f"📊 Groups: {len(group_detected)}\n\n"
-                "Please send the group broadcast message now.\n"
-                "You can use text, photos, or any media.\n\n"
-                "**Format:** `/gbroadcast your message`\n"
-                "**Or reply:** Reply to a message with `/gbroadcast`",
-                buttons=[
-                    [Button.inline("🔙 Cancel", data="broadcast_menu")]
-                ]
+                f"✅ **Group Broadcast Completed**\n\n"
+                f"📊 Total Groups: {success + failed}\n"
+                f"✅ Success: {success}\n"
+                f"❌ Failed: {failed}\n"
+                f"📈 Success Rate: {int(success/(success+failed)*100) if (success+failed) > 0 else 0}%",
+                buttons=[[Button.inline("🔙 Back", data="broadcast_menu")]]
             )
         
         elif data.startswith("group_user_"):
@@ -1036,10 +1091,10 @@ async def callback_handler(event):
             # Switch to inline mode with user query
             await event.edit(
                 f"🔒 **Send whisper to {user_query}**\n\n"
-                f"Now type your message and send.\n"
-                f"The bot will automatically add {user_query} at the end.",
+                f"Now switch to inline mode by clicking the button below,\n"
+                f"then type your message and send.",
                 buttons=[[Button.switch_inline(
-                    f"💌 Whisper {user_query}", 
+                    f"💌 Whisper to {user_query}", 
                     query=f"message {user_query}"
                 )]]
             )
@@ -1070,10 +1125,11 @@ async def callback_handler(event):
                 
                 await event.edit(
                     f"🔒 **Send whisper to {target_text}**\n\n"
-                    f"Now switch to inline mode and type your message for {target_text}",
+                    f"Now switch to inline mode by clicking the button below,\n"
+                    f"then type your message and send.",
                     buttons=[[Button.switch_inline(
                         f"💌 Message {target_text}", 
-                        query=f"@{username}" if username else first_name
+                        query=f"{target_text}"
                     )]]
                 )
             else:
@@ -1245,7 +1301,7 @@ def home():
         len(group_detected),
         sum(len(users) for users in group_users_last_5.values()),
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        (bot.get_me()).wait().username if bot.is_connected() else "bot_username"
+        (await bot.get_me()).username if bot.is_connected() else "bot_username"
     )
 
 @app.route('/health')
