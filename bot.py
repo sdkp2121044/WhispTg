@@ -709,16 +709,25 @@ async def inline_handler(event):
             await event.answer([])
             return
 
+        query_text = event.text or ""
+        
         # Check if in group
-        is_group_context = hasattr(event.query, 'chat_type') and event.query.chat_type in ['group', 'supergroup']
+        is_group_context = False
+        chat_id = None
+        if hasattr(event.query, 'chat_type'):
+            is_group_context = event.query.chat_type in ['group', 'supergroup']
+            if hasattr(event.query, 'peer') and event.query.peer:
+                try:
+                    chat_id = event.query.peer.channel_id or event.query.peer.chat_id or event.query.peer.user_id
+                except:
+                    pass
+        
         recent_buttons = []
         
-        if is_group_context and hasattr(event, 'chat_id') and event.chat_id in group_users_last_5:
-            recent_buttons = get_group_users_buttons(event.chat_id)
+        if is_group_context and chat_id and chat_id in group_users_last_5:
+            recent_buttons = get_group_users_buttons(chat_id)
         else:
             recent_buttons = get_recent_users_buttons(event.sender_id)
-        
-        query_text = event.text or ""
         
         if not query_text.strip():
             if recent_buttons:
@@ -745,33 +754,65 @@ async def inline_handler(event):
         
         text = query_text.strip()
         
-        # If user clicked group user button, it will come as data, handle separately
-        patterns = [r'@(\w+)$', r'(\d+)$']
-        target_user = None
-        message_text = text
+        # Extract message and target user
+        # Patterns to match:
+        # 1. message @username
+        # 2. message 123456789
+        # 3. @username message (reverse format)
+        # 4. 123456789 message (reverse format)
         
-        for pattern in patterns:
-            match = re.search(pattern, text)
-            if match:
-                if pattern == r'@(\w+)$':
-                    target_user = match.group(1)
-                    message_text = text.replace(f"@{target_user}", "").strip()
-                else:
-                    target_user = match.group(1)
-                    message_text = text.replace(target_user, "").strip()
-                break
+        message_text = ""
+        target_user = ""
         
-        if not target_user or not message_text:
+        # Try pattern: something @username
+        username_match = re.search(r'^(.*?)\s+@(\w+)$', text, re.DOTALL)
+        if username_match:
+            message_text = username_match.group(1).strip()
+            target_user = username_match.group(2)
+        
+        # Try pattern: something 123456789
+        id_match = re.search(r'^(.*?)\s+(\d+)$', text, re.DOTALL)
+        if not message_text and id_match:
+            message_text = id_match.group(1).strip()
+            target_user = id_match.group(2)
+        
+        # Try reverse pattern: @username something
+        if not message_text:
+            username_match_rev = re.search(r'^@(\w+)\s+(.*)$', text, re.DOTALL)
+            if username_match_rev:
+                target_user = username_match_rev.group(1)
+                message_text = username_match_rev.group(2).strip()
+        
+        # Try reverse pattern: 123456789 something
+        if not message_text:
+            id_match_rev = re.search(r'^(\d+)\s+(.*)$', text, re.DOTALL)
+            if id_match_rev:
+                target_user = id_match_rev.group(1)
+                message_text = id_match_rev.group(2).strip()
+        
+        # If no pattern matched, check if it's just a username or ID
+        if not message_text:
+            # Check if it's just @username
+            if re.match(r'^@(\w+)$', text):
+                target_user = text[1:]  # Remove @
+                message_text = ""
+            # Check if it's just a number (user ID)
+            elif text.isdigit():
+                target_user = text
+                message_text = ""
+        
+        # If still no target user found
+        if not target_user:
             result = event.builder.article(
                 title="❌ Invalid Format",
                 description="Use: message @username OR message 123456789",
-                text="**Usage:** `your_message @username`\n\n**Examples:**\n• `Hello! @username`\n• `I miss you 123456789`",
+                text="**Usage:** `your_message @username`\n\n**Examples:**\n• `Hello! @username`\n• `I miss you 123456789`\n• `@username Hello!`\n• `123456789 Hello!`",
                 buttons=[[Button.switch_inline("🔄 Try Again", query=text)]]
             )
             await event.answer([result])
             return
         
-        if len(message_text) > 1000:
+        if message_text and len(message_text) > 1000:
             result = event.builder.article(
                 title="❌ Message Too Long",
                 description="Maximum 1000 characters allowed",
@@ -780,10 +821,27 @@ async def inline_handler(event):
             await event.answer([result])
             return
         
+        # If message is empty, show instructions
+        if not message_text.strip():
+            if target_user.isdigit():
+                display_text = f"User ID: {target_user}"
+            else:
+                display_text = f"@{target_user}"
+            
+            result = event.builder.article(
+                title=f"📝 Type message for {display_text}",
+                description=f"Type your message then send",
+                text=f"**Type your whisper message for {display_text}**\n\nNow type your message and the bot will create a secret whisper.",
+                buttons=[[Button.switch_inline(f"✍️ Type message for {display_text}", query=f"{text} ")]]
+            )
+            await event.answer([result])
+            return
+        
         try:
             if target_user.isdigit():
                 user_obj = await bot.get_entity(int(target_user))
             else:
+                # Validate username format
                 if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]{3,30}$', target_user):
                     result = event.builder.article(
                         title="❌ Invalid Username",
@@ -805,9 +863,8 @@ async def inline_handler(event):
                 return
             
             # Add to appropriate recent list
-            if is_group_context and hasattr(event, 'chat_id'):
+            if is_group_context and chat_id:
                 # Update group user history
-                chat_id = event.chat_id
                 add_user_to_group_history(
                     chat_id,
                     user_obj.id,
@@ -827,11 +884,12 @@ async def inline_handler(event):
             result = event.builder.article(
                 title="❌ User Not Found",
                 description="User not found or invalid",
-                text="❌ User not found! Please check username or user ID."
+                text="❌ User not found! Please check username or user ID.\n\n**Tips:**\n• Usernames start with @\n• User IDs are numbers only\n• Make sure the user exists"
             )
             await event.answer([result])
             return
         
+        # Create message ID
         message_id = f'msg_{event.sender_id}_{user_obj.id}_{int(datetime.now().timestamp())}'
         messages_db[message_id] = {
             'user_id': user_obj.id,
@@ -839,15 +897,27 @@ async def inline_handler(event):
             'sender_id': event.sender_id,
             'timestamp': datetime.now().isoformat(),
             'target_name': getattr(user_obj, 'first_name', 'User'),
+            'target_username': getattr(user_obj, 'username', None),
             'is_group': is_group_context,
-            'group_id': event.chat_id if hasattr(event, 'chat_id') and is_group_context else None
+            'group_id': chat_id if is_group_context else None
         }
         
+        # Prepare response
         target_name = getattr(user_obj, 'first_name', 'User')
+        target_username = getattr(user_obj, 'username', None)
+        
+        if target_username:
+            display_target = f"@{target_username}"
+        else:
+            display_target = f"{target_name} (ID: {user_obj.id})"
+        
+        result_text = f"**🔐 A secret message for {display_target}!**\n\n"
+        result_text += f"*Note: Only {display_target} can open this message.*"
+        
         result = event.builder.article(
             title=f"🔒 Secret Message for {target_name}",
-            description=f"Click to send secret message",
-            text=f"**🔐 A secret message for {target_name}!**\n\n*Note: Only {target_name} can open this message.*",
+            description=f"Click to send secret message to {display_target}",
+            text=result_text,
             buttons=[[Button.inline("🔓 Show Message", data=message_id)]]
         )
         
