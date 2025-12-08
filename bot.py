@@ -4,7 +4,9 @@ import re
 import asyncio
 import json
 from datetime import datetime
-from telethon import TelegramClient, events, Button
+from flask import Flask
+import threading
+from typing import List, Dict, Set
 
 # Configure logging
 logging.basicConfig(
@@ -14,57 +16,53 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Environment variables
-API_ID = int(os.getenv('API_ID', ''))
-API_HASH = os.getenv('API_HASH', '')
-BOT_TOKEN = os.getenv('BOT_TOKEN', '')
-ADMIN_ID = int(os.getenv('ADMIN_ID', ''))
-OWNER_ID = ADMIN_ID  # Shri button owner ID
+API_ID = int(os.getenv('API_ID', '25136703'))
+API_HASH = os.getenv('API_HASH', 'accfaf5ecd981c67e481328515c39f89')
+BOT_TOKEN = os.getenv('BOT_TOKEN', '8366493122:AAG7nl7a3BqXd8-oyTAHovAjc7UUuLeHb-4')
+ADMIN_ID = int(os.getenv('ADMIN_ID', '8027090675'))
+PORT = int(os.environ.get('PORT', 10000))
 
-# Support channels and main bot for cloning
+# Import Telethon
+try:
+    from telethon import TelegramClient, events, Button
+    from telethon.errors import SessionPasswordNeededError, ChatWriteForbiddenError, FloodWaitError
+    from telethon.tl.types import Channel, Chat
+except ImportError as e:
+    logger.error(f"Telethon import error: {e}")
+    raise
+
+# Support channels
 SUPPORT_CHANNEL = "shribots"
 SUPPORT_GROUP = "idxhelp"
-MAIN_BOT_FOR_CLONE = "upspbot"
 
 # Initialize bot
 try:
     bot = TelegramClient('whisper_bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-    logger.info("✅ Bot initialized successfully")
+    logger.info("✅ Bot client initialized successfully")
 except Exception as e:
     logger.error(f"❌ Failed to initialize bot: {e}")
     raise
 
-# Check if this is main bot or cloned bot
-try:
-    bot_me = asyncio.run_coroutine_threadsafe(bot.get_me(), bot.loop).result()
-    IS_MAIN_BOT = bot_me.username == MAIN_BOT_FOR_CLONE
-    logger.info(f"🤖 Bot Type: {'MAIN' if IS_MAIN_BOT else 'CLONED'} (@{bot_me.username})")
-except:
-    IS_MAIN_BOT = False
-
 # Storage
-messages_db = {}  # message_id: message_data
+messages_db = {}
 recent_users = {}
 user_cooldown = {}
 user_bots = {}
 clone_stats = {}
-user_last_targets = {}
-user_clone_tokens = {}
-all_whispers = []  # Store all whispers for owner
-
-# Broadcast state
-broadcasting = False
+group_users_last_5: Dict[int, List[Dict]] = {}  # {chat_id: [user1, user2...]}
+group_detected: Set[int] = set()  # Store detected group IDs
+last_group_activity: Dict[int, float] = {}  # Track last group activity time
 
 # Data files
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 RECENT_USERS_FILE = os.path.join(DATA_DIR, "recent_users.json")
 CLONE_STATS_FILE = os.path.join(DATA_DIR, "clone_stats.json")
-USER_LAST_TARGETS_FILE = os.path.join(DATA_DIR, "user_last_targets.json")
-USER_CLONE_TOKENS_FILE = os.path.join(DATA_DIR, "user_clone_tokens.json")
-ALL_WHISPERS_FILE = os.path.join(DATA_DIR, "all_whispers.json")
+GROUP_DATA_FILE = os.path.join(DATA_DIR, "group_data.json")
+BROADCAST_HISTORY_FILE = os.path.join(DATA_DIR, "broadcast_history.json")
 
 def load_data():
-    global recent_users, clone_stats, user_last_targets, user_clone_tokens, all_whispers
+    global recent_users, clone_stats, group_users_last_5, group_detected, last_group_activity
     try:
         if os.path.exists(RECENT_USERS_FILE):
             with open(RECENT_USERS_FILE, 'r', encoding='utf-8') as f:
@@ -75,29 +73,22 @@ def load_data():
             with open(CLONE_STATS_FILE, 'r', encoding='utf-8') as f:
                 clone_stats = json.load(f)
             logger.info(f"✅ Loaded {len(clone_stats)} clone stats")
-        
-        if os.path.exists(USER_LAST_TARGETS_FILE):
-            with open(USER_LAST_TARGETS_FILE, 'r', encoding='utf-8') as f:
-                user_last_targets = json.load(f)
-            logger.info(f"✅ Loaded {len(user_last_targets)} user last targets")
-        
-        if os.path.exists(USER_CLONE_TOKENS_FILE):
-            with open(USER_CLONE_TOKENS_FILE, 'r', encoding='utf-8') as f:
-                user_clone_tokens = json.load(f)
-            logger.info(f"✅ Loaded {len(user_clone_tokens)} user clone tokens")
-        
-        if os.path.exists(ALL_WHISPERS_FILE):
-            with open(ALL_WHISPERS_FILE, 'r', encoding='utf-8') as f:
-                all_whispers = json.load(f)
-            logger.info(f"✅ Loaded {len(all_whispers)} whispers for owner")
-                
+            
+        if os.path.exists(GROUP_DATA_FILE):
+            with open(GROUP_DATA_FILE, 'r', encoding='utf-8') as f:
+                group_data = json.load(f)
+                group_users_last_5 = group_data.get('group_users_last_5', {})
+                group_detected = set(group_data.get('group_detected', []))
+                last_group_activity = group_data.get('last_group_activity', {})
+            logger.info(f"✅ Loaded {len(group_users_last_5)} group users data")
+            
     except Exception as e:
         logger.error(f"❌ Error loading data: {e}")
         recent_users = {}
         clone_stats = {}
-        user_last_targets = {}
-        user_clone_tokens = {}
-        all_whispers = []
+        group_users_last_5 = {}
+        group_detected = set()
+        last_group_activity = {}
 
 def save_data():
     try:
@@ -106,15 +97,13 @@ def save_data():
         
         with open(CLONE_STATS_FILE, 'w', encoding='utf-8') as f:
             json.dump(clone_stats, f, indent=2, ensure_ascii=False)
-        
-        with open(USER_LAST_TARGETS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(user_last_targets, f, indent=2, ensure_ascii=False)
-        
-        with open(USER_CLONE_TOKENS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(user_clone_tokens, f, indent=2, ensure_ascii=False)
-        
-        with open(ALL_WHISPERS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(all_whispers, f, indent=2, ensure_ascii=False)
+            
+        with open(GROUP_DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump({
+                'group_users_last_5': group_users_last_5,
+                'group_detected': list(group_detected),
+                'last_group_activity': last_group_activity
+            }, f, indent=2, ensure_ascii=False)
             
     except Exception as e:
         logger.error(f"❌ Error saving data: {e}")
@@ -122,93 +111,309 @@ def save_data():
 # Load data on startup
 load_data()
 
-# Different welcome messages for main and cloned bots
-if IS_MAIN_BOT:
-    WELCOME_TEXT = """
+WELCOME_TEXT = """
 ╔══════════════════════╗
 ║     🎭 𝗦𝗛𝗥𝗜𝗕𝗢𝗧𝗦     ║ 𝐏𝐨𝐰𝐞𝐫𝐞𝐝 𝐛𝐲
-║    𝗪𝗛𝗜𝗦𝗣𝗘𝗥 𝗕𝗢𝗧    ║      𝐒𝐡𝐫𝐢
+║    𝗪𝗛𝗜𝗦𝗣𝗘𝗥 𝗕𝗢𝗧    ║      𝐀𝐫𝐭𝐢𝐬𝐭
 ╚══════════════════════╝
 
-🤫 Welcome to MAIN Whisper Bot!
+🤫 Welcome to Secret Whisper Bot!
 
 🔒 Send anonymous secret messages
 🚀 Only intended recipient can read
 🎯 Easy to use inline mode
-🤖 **Clone your own bot here**
-👑 Owner can read all whispers
+🤖 Clone own bot to use @Shribots
 
-⚡ **Instant Features:**
-• Username/ID लिखते ही send
-• सही या गलत सब पर काम
-• Last user automatically shows
-• One-step sending
-
-📌 **Cloning Rules:**
-• 1 User = 1 Bot only
-• Clone only in main bot
-• Use /clone command
-"""
-else:
-    WELCOME_TEXT = """
-╔══════════════════════╗
-║     🎭 𝗖𝗟𝗢𝗡𝗘𝗗       ║ 𝐏𝐨𝐰𝐞𝐫𝐞𝐝 𝐛𝐲
-║    𝗪𝗛𝗜𝗦𝗣𝗘𝗥 𝗕𝗢𝗧    ║      𝐒𝐡𝐫𝐢
-╚══════════════════════╝
-
-🤫 Welcome to your Whisper Bot!
-
-🔒 Send anonymous secret messages
-🚀 Only intended recipient can read
-🎯 Easy to use inline mode
-
-⚡ **Same Features as Main Bot:**
-• Username/ID लिखते ही send
-• सही या गलत सब पर काम
-• Last user automatically shows
-• One-step sending
-
-💡 **Tip:** Type @{} in any chat
+Create whispers that only specific users can unlock!
 """
 
 HELP_TEXT = """
 📖 **How to Use Whisper Bot**
 
-**1. Instant Mode (एक बार में):**
-   • Type `@{} message @username`
-   • OR `@{} message 123456789`
-   • Send immediately!
+**1. Inline Mode:**
+   • Type `@{}` in any chat
+   • Write your message  
+   • Add @username OR user ID at end
+   • Send!
 
 **2. Examples:**
    • `@{} Hello! @username`
    • `@{} I miss you 123456789`
-   • `@{} Hi @anyname` (fake username works!)
 
-**3. Last User Feature:**
-   • Next time @botusername टाइप करते ही
-   • All recent users automatically show
-   • Easy to send again to same person
-
-**4. Commands in {}:**
+**3. Commands:**
    • /start - Start bot
    • /help - Show help
-   • /clone - Clone your bot (1 user = 1 bot)
-   • /remove - Remove your bot
-   • /mybot - Your bot info
-   • /stats - Admin stats
-   • /broadcast - Admin: Broadcast message
-   • /announce - Admin: Send announcement
-   • /bstats - Admin: Broadcast stats
-   • /ping - Check bot ping
+   • /stats - Admin statistics
+   • /clone - Clone your own bot
+   • /remove - Remove your cloned bot
+   • /broadcast - Broadcast to all users (Admin only)
+   • /gbroadcast - Broadcast to groups (Admin only)
 
-**5. Owner Power:**
-   👑 Bot owner can read ALL whispers
-   🔍 Click "Shri" button to see all whispers
-   📢 Admin broadcast features
-
-✅ **Works with ANY username or ID!**
-🔒 **Only mentioned user can read (except owner)**
+🔒 **Only the mentioned user can read your message!**
 """
+
+# ============ NEW: GROUP USER TRACKING FUNCTIONS ============
+
+def add_user_to_group_history(chat_id: int, user_id: int, username: str = None, first_name: str = None):
+    """Add user to group's last 5 users list"""
+    try:
+        if chat_id not in group_users_last_5:
+            group_users_last_5[chat_id] = []
+        
+        # Remove if user already exists
+        group_users_last_5[chat_id] = [u for u in group_users_last_5[chat_id] if u.get('user_id') != user_id]
+        
+        # Add new user at beginning
+        user_data = {
+            'user_id': user_id,
+            'username': username,
+            'first_name': first_name,
+            'timestamp': datetime.now().isoformat()
+        }
+        group_users_last_5[chat_id].insert(0, user_data)
+        
+        # Keep only last 5 users
+        if len(group_users_last_5[chat_id]) > 5:
+            group_users_last_5[chat_id] = group_users_last_5[chat_id][:5]
+        
+        # Update activity timestamp
+        last_group_activity[chat_id] = datetime.now().timestamp()
+        
+        # Mark as detected group
+        group_detected.add(chat_id)
+        
+        save_data()
+        logger.info(f"✅ Added user {user_id} to group {chat_id} history")
+        
+    except Exception as e:
+        logger.error(f"Error adding user to group history: {e}")
+
+def get_group_users_buttons(chat_id: int):
+    """Get last 5 users from group as buttons"""
+    try:
+        if chat_id not in group_users_last_5 or not group_users_last_5[chat_id]:
+            return []
+        
+        buttons = []
+        for user_data in group_users_last_5[chat_id][:5]:  # Last 5 users
+            user_id = user_data.get('user_id')
+            username = user_data.get('username')
+            first_name = user_data.get('first_name', 'User')
+            
+            if username:
+                display_text = f"@{username}"
+                query_data = f"@{username}"
+            else:
+                display_text = f"{first_name}"
+                query_data = str(user_id)
+            
+            if len(display_text) > 15:
+                display_text = display_text[:15] + "..."
+            
+            buttons.append([Button.inline(
+                f"👤 {display_text}", 
+                data=f"group_user_{query_data}"
+            )])
+        
+        # Add a clear button
+        buttons.append([Button.inline("🧹 Clear List", data=f"clear_group_{chat_id}")])
+        
+        return buttons
+    except Exception as e:
+        logger.error(f"Error getting group users: {e}")
+        return []
+
+# ============ NEW: BROADCAST FUNCTIONS ============
+
+async def broadcast_to_users(message_text: str, sender_id: int, include_photo: bool = False, photo_path: str = None):
+    """Broadcast message to all users who have interacted with bot"""
+    try:
+        logger.info(f"📢 Starting user broadcast from {sender_id}")
+        
+        # Get all unique users from recent_users and messages_db
+        all_users = set()
+        
+        # Add from recent_users
+        for user_data in recent_users.values():
+            all_users.add(user_data['user_id'])
+        
+        # Add from messages_db (senders and receivers)
+        for msg_data in messages_db.values():
+            all_users.add(msg_data['user_id'])
+            all_users.add(msg_data['sender_id'])
+        
+        # Add from clone_stats
+        for stats in clone_stats.values():
+            all_users.add(stats['owner_id'])
+        
+        total_users = len(all_users)
+        logger.info(f"📊 Broadcasting to {total_users} users")
+        
+        success = 0
+        failed = 0
+        
+        broadcast_progress = await bot.send_message(sender_id, f"📢 **Broadcast Started**\n\n📊 Total Users: {total_users}\n✅ Success: 0\n❌ Failed: 0\n⏳ Progress: 0%")
+        
+        for index, user_id in enumerate(all_users):
+            try:
+                if include_photo and photo_path:
+                    await bot.send_file(user_id, photo_path, caption=message_text)
+                else:
+                    await bot.send_message(user_id, message_text)
+                
+                success += 1
+                
+                # Update progress every 10 users or 10%
+                if index % 10 == 0 or index == total_users - 1:
+                    progress_percent = int((index + 1) / total_users * 100)
+                    await broadcast_progress.edit(
+                        f"📢 **Broadcast in Progress**\n\n"
+                        f"📊 Total Users: {total_users}\n"
+                        f"✅ Success: {success}\n"
+                        f"❌ Failed: {failed}\n"
+                        f"⏳ Progress: {progress_percent}%\n"
+                        f"📨 Sent: {index + 1}/{total_users}"
+                    )
+                
+                # Small delay to avoid flood
+                await asyncio.sleep(0.1)
+                
+            except FloodWaitError as e:
+                logger.warning(f"Flood wait for user {user_id}: {e.seconds} seconds")
+                await asyncio.sleep(e.seconds + 1)
+                continue
+            except Exception as e:
+                logger.error(f"Failed to send to user {user_id}: {e}")
+                failed += 1
+                continue
+        
+        # Final report
+        await broadcast_progress.edit(
+            f"✅ **Broadcast Completed**\n\n"
+            f"📊 Total Users: {total_users}\n"
+            f"✅ Success: {success}\n"
+            f"❌ Failed: {failed}\n"
+            f"📈 Success Rate: {int(success/total_users*100)}%"
+        )
+        
+        # Save broadcast history
+        save_broadcast_history('users', sender_id, message_text, total_users, success, failed)
+        
+        return success, failed
+        
+    except Exception as e:
+        logger.error(f"Broadcast error: {e}")
+        await bot.send_message(sender_id, f"❌ Broadcast failed: {str(e)}")
+        return 0, 0
+
+async def broadcast_to_groups(message_text: str, sender_id: int, include_photo: bool = False, photo_path: str = None):
+    """Broadcast message to all detected groups"""
+    try:
+        logger.info(f"📢 Starting group broadcast from {sender_id}")
+        
+        total_groups = len(group_detected)
+        logger.info(f"📊 Broadcasting to {total_groups} groups")
+        
+        if total_groups == 0:
+            await bot.send_message(sender_id, "❌ No groups detected yet. Add bot to groups first.")
+            return 0, 0
+        
+        success = 0
+        failed = 0
+        
+        broadcast_progress = await bot.send_message(sender_id, f"📢 **Group Broadcast Started**\n\n📊 Total Groups: {total_groups}\n✅ Success: 0\n❌ Failed: 0\n⏳ Progress: 0%")
+        
+        for index, group_id in enumerate(group_detected):
+            try:
+                # Check if bot can send messages in group
+                chat = await bot.get_entity(group_id)
+                
+                if include_photo and photo_path:
+                    await bot.send_file(chat, photo_path, caption=message_text)
+                else:
+                    await bot.send_message(chat, message_text)
+                
+                success += 1
+                
+                # Update progress
+                if index % 5 == 0 or index == total_groups - 1:
+                    progress_percent = int((index + 1) / total_groups * 100)
+                    await broadcast_progress.edit(
+                        f"📢 **Group Broadcast in Progress**\n\n"
+                        f"📊 Total Groups: {total_groups}\n"
+                        f"✅ Success: {success}\n"
+                        f"❌ Failed: {failed}\n"
+                        f"⏳ Progress: {progress_percent}%\n"
+                        f"📨 Sent: {index + 1}/{total_groups}"
+                    )
+                
+                # Small delay
+                await asyncio.sleep(1)
+                
+            except FloodWaitError as e:
+                logger.warning(f"Flood wait for group {group_id}: {e.seconds} seconds")
+                await asyncio.sleep(e.seconds + 1)
+                continue
+            except ChatWriteForbiddenError:
+                logger.warning(f"Cannot write in group {group_id}")
+                failed += 1
+                continue
+            except Exception as e:
+                logger.error(f"Failed to send to group {group_id}: {e}")
+                failed += 1
+                continue
+        
+        # Final report
+        await broadcast_progress.edit(
+            f"✅ **Group Broadcast Completed**\n\n"
+            f"📊 Total Groups: {total_groups}\n"
+            f"✅ Success: {success}\n"
+            f"❌ Failed: {failed}\n"
+            f"📈 Success Rate: {int(success/total_groups*100)}%"
+        )
+        
+        # Save broadcast history
+        save_broadcast_history('groups', sender_id, message_text, total_groups, success, failed)
+        
+        return success, failed
+        
+    except Exception as e:
+        logger.error(f"Group broadcast error: {e}")
+        await bot.send_message(sender_id, f"❌ Group broadcast failed: {str(e)}")
+        return 0, 0
+
+def save_broadcast_history(broadcast_type: str, sender_id: int, message: str, total: int, success: int, failed: int):
+    """Save broadcast history to file"""
+    try:
+        history = {}
+        if os.path.exists(BROADCAST_HISTORY_FILE):
+            with open(BROADCAST_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                history = json.load(f)
+        
+        broadcast_id = f"{broadcast_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        history[broadcast_id] = {
+            'type': broadcast_type,
+            'sender_id': sender_id,
+            'message': message[:500],  # Store first 500 chars
+            'total': total,
+            'success': success,
+            'failed': failed,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Keep only last 50 broadcasts
+        if len(history) > 50:
+            # Remove oldest
+            oldest_key = min(history.keys())
+            del history[oldest_key]
+        
+        with open(BROADCAST_HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, indent=2, ensure_ascii=False)
+            
+    except Exception as e:
+        logger.error(f"Error saving broadcast history: {e}")
+
+# ============ MODIFIED EXISTING FUNCTIONS ============
 
 def add_to_recent_users(user_id, target_user_id, target_username=None, target_first_name=None):
     """Add user to recent users list"""
@@ -221,8 +426,8 @@ def add_to_recent_users(user_id, target_user_id, target_username=None, target_fi
             'last_used': datetime.now().isoformat()
         }
         
-        # Keep only last 20 users
-        if len(recent_users) > 20:
+        # Keep only last 10 users
+        if len(recent_users) > 10:
             oldest_key = min(recent_users.keys(), key=lambda k: recent_users[k]['last_used'])
             del recent_users[oldest_key]
         
@@ -230,171 +435,77 @@ def add_to_recent_users(user_id, target_user_id, target_username=None, target_fi
     except Exception as e:
         logger.error(f"Error adding to recent users: {e}")
 
-def get_recent_users_buttons(user_id):
-    """Get recent users buttons for inline suggestions"""
-    try:
-        if not recent_users:
-            return []
-        
-        sorted_users = sorted(recent_users.items(), 
-                            key=lambda x: x[1].get('last_used', ''), 
-                            reverse=True)
-        
-        buttons = []
-        for user_key, user_data in sorted_users[:8]:  # Show 8 recent users
-            username = user_data.get('username')
-            first_name = user_data.get('first_name', 'User')
-            
-            if username:
-                display_text = f"@{username}"
-            else:
-                display_text = f"{first_name}"
-            
-            if len(display_text) > 12:
-                display_text = display_text[:12] + "..."
-            
-            buttons.append([Button.inline(
-                f"🔒 {display_text}", 
-                data=f"recent_{user_key}"
-            )])
-        
-        return buttons
-    except Exception as e:
-        logger.error(f"Error getting recent users: {e}")
-        return []
-
-def save_user_last_target(user_id, target_info):
-    """Save user's last target"""
-    try:
-        user_last_targets[str(user_id)] = {
-            'target': target_info,
-            'timestamp': datetime.now().isoformat()
-        }
-        save_data()
-    except Exception as e:
-        logger.error(f"Error saving last target: {e}")
-
-def get_user_last_target(user_id):
-    """Get user's last target"""
-    return user_last_targets.get(str(user_id))
-
-def save_whisper_for_owner(message_data):
-    """Save whisper for owner viewing"""
-    try:
-        all_whispers.append({
-            'message_id': message_data.get('message_id'),
-            'sender_id': message_data.get('sender_id'),
-            'sender_name': message_data.get('sender_name', 'Anonymous'),
-            'target_name': message_data.get('target_name', 'Unknown'),
-            'target_username': message_data.get('target_username'),
-            'message': message_data.get('message'),
-            'timestamp': datetime.now().isoformat(),
-            'is_valid_user': message_data.get('is_valid_user', False)
-        })
-        
-        # Keep only last 1000 whispers
-        if len(all_whispers) > 1000:
-            all_whispers.pop(0)
-        
-        save_data()
-    except Exception as e:
-        logger.error(f"Error saving whisper for owner: {e}")
-
-def is_cooldown(user_id):
-    """Check if user is in cooldown"""
-    now = datetime.now().timestamp()
-    if user_id in user_cooldown:
-        if now - user_cooldown[user_id] < 1:
-            return True
-    user_cooldown[user_id] = now
-    return False
-
 @bot.on(events.NewMessage(pattern='/start'))
 async def start_handler(event):
     try:
-        user_id = event.sender_id
-        logger.info(f"🚀 Start from user: {user_id}")
+        logger.info(f"🚀 Start command from user: {event.sender_id}")
         
-        # Get last target
-        last_target = get_user_last_target(user_id)
+        # Check if in group
+        if event.is_group or event.is_channel:
+            chat_id = event.chat_id
+            add_user_to_group_history(
+                chat_id, 
+                event.sender_id,
+                event.sender.username,
+                event.sender.first_name
+            )
+            
+            # Show group welcome message
+            await event.reply(
+                "🤫 **Whisper Bot is now active in this group!**\n\n"
+                "🔒 Send anonymous whispers to group members\n"
+                "📝 Use inline mode: `@bot_username message @username`\n\n"
+                "📌 **Recent group members will appear when you type a whisper!**",
+                buttons=[
+                    [Button.switch_inline("🚀 Send Whisper", query="", same_peer=True)],
+                    [Button.url("📢 Channel", f"https://t.me/{SUPPORT_CHANNEL}")]
+                ]
+            )
+            return
         
-        # Create buttons - DIFFERENT FOR OWNER
-        buttons = []
-        
-        if IS_MAIN_BOT:
-            # Main bot buttons
-            buttons.append([
-                Button.url("📢 Channel", f"https://t.me/{SUPPORT_CHANNEL}"),
-                Button.url("👥 Group", f"https://t.me/{SUPPORT_GROUP}")
-            ])
+        # Private chat welcome message
+        if event.sender_id == ADMIN_ID:
+            await event.reply(
+                WELCOME_TEXT,
+                buttons=[
+                    [Button.url("📢 Support Channel", f"https://t.me/{SUPPORT_CHANNEL}")],
+                    [Button.url("👥 Support Group", f"https://t.me/{SUPPORT_GROUP}")],
+                    [Button.switch_inline("🚀 Try Now", query="")],
+                    [Button.inline("📊 Statistics", data="admin_stats"), Button.inline("📖 Help", data="help")],
+                    [Button.inline("🔧 Clone Bot", data="clone_info")],
+                    [Button.inline("📢 Broadcast", data="broadcast_menu")]
+                ]
+            )
         else:
-            # Cloned bot buttons
-            buttons.append([
-                Button.url("📢 Main Bot", f"https://t.me/{MAIN_BOT_FOR_CLONE}"),
-                Button.url("👥 Support", f"https://t.me/{SUPPORT_GROUP}")
-            ])
-        
-        buttons.append([Button.switch_inline("🚀 Send Whisper", query="")])
-        
-        # Add last target button if exists
-        if last_target:
-            target_info = last_target['target']
-            if isinstance(target_info, dict):
-                target_name = target_info.get('first_name', 'User')
-                buttons.append([Button.inline(f"↪️ Last: {target_name}", data="use_last_target")])
-        
-        # Add help and clone buttons together
-        if IS_MAIN_BOT:
-            buttons.append([
-                Button.inline("📖 Help", data="help"),
-                Button.inline("🔧 Clone", data="clone_info")
-            ])
-        else:
-            buttons.append([
-                Button.inline("📖 Help", data="help"),
-                Button.url("🔧 Clone", f"https://t.me/{MAIN_BOT_FOR_CLONE}")
-            ])
-        
-        # Add Shri button for owner
-        if user_id == OWNER_ID:
-            buttons.append([Button.inline("👑 Shri", data="shri_view_all")])
-        
-        # Add stats button for admin
-        if user_id == ADMIN_ID and user_id != OWNER_ID:
-            buttons.append([Button.inline("📊 Stats", data="admin_stats")])
-        
-        # Add broadcast button for admin
-        if user_id in [ADMIN_ID, OWNER_ID]:
-            buttons.append([Button.inline("📢 Broadcast", data="broadcast_menu")])
-        
-        # Send welcome message
-        if IS_MAIN_BOT:
-            await event.reply(WELCOME_TEXT, buttons=buttons)
-        else:
-            bot_username = (await bot.get_me()).username
-            welcome = WELCOME_TEXT.format(bot_username)
-            await event.reply(welcome, buttons=buttons)
-        
+            await event.reply(
+                WELCOME_TEXT,
+                buttons=[
+                    [Button.url("📢 Support Channel", f"https://t.me/{SUPPORT_CHANNEL}")],
+                    [Button.url("👥 Support Group", f"https://t.me/{SUPPORT_GROUP}")],
+                    [Button.switch_inline("🚀 Try Now", query="")],
+                    [Button.inline("📖 Help", data="help"), Button.inline("🔧 Clone Bot", data="clone_info")]
+                ]
+            )
     except Exception as e:
         logger.error(f"Start error: {e}")
-        await event.reply("❌ Error occurred.")
+        await event.reply("❌ An error occurred. Please try again.")
 
 @bot.on(events.NewMessage(pattern='/help'))
 async def help_handler(event):
     try:
         bot_username = (await bot.get_me()).username
-        bot_type = "Main Bot" if IS_MAIN_BOT else "Your Bot"
-        help_text = HELP_TEXT.format(bot_username, bot_username, bot_username, bot_type)
+        help_text = HELP_TEXT.format(bot_username, bot_username, bot_username)
         
-        buttons = [
-            [Button.switch_inline("🚀 Try Now", query="")],
-            [Button.inline("🔙 Back", data="back_start")]
-        ]
-        
-        await event.reply(help_text, buttons=buttons)
+        await event.reply(
+            help_text,
+            buttons=[
+                [Button.switch_inline("🚀 Try Now", query="")],
+                [Button.inline("🔙 Back", data="back_start")]
+            ]
+        )
     except Exception as e:
         logger.error(f"Help error: {e}")
-        await event.reply("❌ An error occurred.")
+        await event.reply("❌ An error occurred. Please try again.")
 
 @bot.on(events.NewMessage(pattern='/stats'))
 async def stats_handler(event):
@@ -404,30 +515,21 @@ async def stats_handler(event):
         
     try:
         total_clones = len(clone_stats)
-        total_whispers = len(all_whispers)
+        total_groups = len(group_detected)
+        total_group_users = sum(len(users) for users in group_users_last_5.values())
         
         stats_text = f"""
 📊 **Admin Statistics**
 
-👥 Recent Users: {len(recent_users)}
+👤 Recent Users: {len(recent_users)}
 💬 Total Messages: {len(messages_db)}
-📨 All Whispers: {total_whispers}
 🤖 Total Clones: {total_clones}
-🎯 Last Targets: {len(user_last_targets)}
-📢 Broadcast Status: {'Active' if broadcasting else 'Inactive'}
+👥 Groups Detected: {total_groups}
+👤 Group Users Tracked: {total_group_users}
 🆔 Admin ID: {ADMIN_ID}
-👑 Owner ID: {OWNER_ID}
-🤖 Bot Type: {'MAIN' if IS_MAIN_BOT else 'CLONED'}
-🔗 Host: Render
+🌐 Port: {PORT}
 
-**Features Active:**
-✅ Instant username detection
-✅ गलत username support
-✅ Auto last user display
-✅ One-step sending
-✅ Owner whisper view
-✅ Broadcast system
-
+**Bot Status:** ✅ Running
 **Last Updated:** {datetime.now().strftime("%Y-%m-%d %H:%M")}
         """
         
@@ -436,208 +538,266 @@ async def stats_handler(event):
         logger.error(f"Stats error: {e}")
         await event.reply("❌ Error fetching statistics.")
 
-@bot.on(events.InlineQuery)
-async def inline_handler(event):
-    """Handle inline queries - ONE STEP SENDING"""
+# ============ NEW: BROADCAST COMMANDS ============
+
+@bot.on(events.NewMessage(pattern='/broadcast'))
+async def broadcast_command(event):
+    """Handle /broadcast command for users"""
+    if event.sender_id != ADMIN_ID:
+        await event.reply("❌ Admin only command!")
+        return
+    
+    try:
+        if not event.text or len(event.text.split()) == 1:
+            await event.reply(
+                "📢 **User Broadcast**\n\n"
+                "Send a message to broadcast to all users.\n\n"
+                "**Format:**\n"
+                "`/broadcast your message here`\n\n"
+                "**Or reply to a message:**\n"
+                "Reply to any message with `/broadcast`",
+                buttons=[
+                    [Button.inline("📊 View Stats", data="broadcast_stats")],
+                    [Button.inline("🔙 Back", data="back_start")]
+                ]
+            )
+            return
+        
+        # Check if replying to a message
+        if event.is_reply:
+            reply_msg = await event.get_reply_message()
+            message_text = reply_msg.text or reply_msg.caption or ""
+        else:
+            # Get message from command
+            message_text = event.text.split(' ', 1)[1]
+        
+        if not message_text.strip():
+            await event.reply("❌ Please provide a message to broadcast.")
+            return
+        
+        confirm_text = (
+            f"📢 **Confirm Broadcast to Users**\n\n"
+            f"**Message:**\n{message_text[:500]}{'...' if len(message_text) > 500 else ''}\n\n"
+            f"⚠️ This will be sent to all users. Continue?"
+        )
+        
+        await event.reply(
+            confirm_text,
+            buttons=[
+                [Button.inline("✅ Yes, Broadcast", data=f"confirm_user_broadcast")],
+                [Button.inline("❌ Cancel", data="back_start")]
+            ]
+        )
+        
+    except Exception as e:
+        logger.error(f"Broadcast command error: {e}")
+        await event.reply(f"❌ Error: {str(e)}")
+
+@bot.on(events.NewMessage(pattern='/gbroadcast'))
+async def gbroadcast_command(event):
+    """Handle /gbroadcast command for groups"""
+    if event.sender_id != ADMIN_ID:
+        await event.reply("❌ Admin only command!")
+        return
+    
+    try:
+        if not event.text or len(event.text.split()) == 1:
+            await event.reply(
+                "📢 **Group Broadcast**\n\n"
+                "Send a message to broadcast to all groups.\n\n"
+                "**Format:**\n"
+                "`/gbroadcast your message here`\n\n"
+                "**Or reply to a message:**\n"
+                "Reply to any message with `/gbroadcast`\n\n"
+                f"📊 **Groups Detected:** {len(group_detected)}",
+                buttons=[
+                    [Button.inline("📊 View Groups", data="group_stats")],
+                    [Button.inline("🔙 Back", data="back_start")]
+                ]
+            )
+            return
+        
+        # Check if replying to a message
+        if event.is_reply:
+            reply_msg = await event.get_reply_message()
+            message_text = reply_msg.text or reply_msg.caption or ""
+        else:
+            # Get message from command
+            message_text = event.text.split(' ', 1)[1]
+        
+        if not message_text.strip():
+            await event.reply("❌ Please provide a message to broadcast.")
+            return
+        
+        confirm_text = (
+            f"📢 **Confirm Group Broadcast**\n\n"
+            f"**Message:**\n{message_text[:500]}{'...' if len(message_text) > 500 else ''}\n\n"
+            f"📊 **Groups:** {len(group_detected)}\n"
+            f"⚠️ This will be sent to all detected groups. Continue?"
+        )
+        
+        await event.reply(
+            confirm_text,
+            buttons=[
+                [Button.inline("✅ Yes, Broadcast", data=f"confirm_group_broadcast")],
+                [Button.inline("❌ Cancel", data="back_start")]
+            ]
+        )
+        
+    except Exception as e:
+        logger.error(f"Group broadcast command error: {e}")
+        await event.reply(f"❌ Error: {str(e)}")
+
+# ============ MODIFIED INLINE HANDLER FOR GROUPS ============
+
+async def handle_inline_query(event, client=None):
+    """Handle inline queries with group support"""
+    if client is None:
+        client = bot
+    
     try:
         if is_cooldown(event.sender_id):
             await event.answer([])
             return
+
+        # Check if in group
+        is_group_context = event.query.chat_type in ['group', 'supergroup']
+        recent_buttons = []
         
-        query_text = event.text.strip() if event.text else ""
-        sender_id = event.sender_id
+        if is_group_context and event.chat_id in group_users_last_5:
+            recent_buttons = get_group_users_buttons(event.chat_id)
+        else:
+            recent_buttons = get_recent_users_buttons(event.sender_id)
         
-        logger.info(f"📝 Inline query: User={sender_id}, Text='{query_text}'")
-        
-        # If empty query, show recent users
-        if not query_text:
-            recent_buttons = get_recent_users_buttons(sender_id)
-            last_target = get_user_last_target(sender_id)
-            
-            result_text = "**🤫 Send Secret Message**\n\n"
-            
-            if last_target:
-                target_info = last_target['target']
-                if isinstance(target_info, dict):
-                    target_name = target_info.get('first_name', 'User')
-                    target_username = target_info.get('username')
-                    target_display = f"@{target_username}" if target_username else target_name
-                    result_text += f"**Last User:** {target_display}\n\n"
-            
-            result_text += "**Type:**\n`message @username`\nOR\n`message 123456789`\n\n"
-            result_text += "**Examples:**\n• `Hello @username`\n• `Hi 123456789`\n\n"
-            result_text += "✅ **Works with ANY username/ID!**"
-            
+        if not event.text or not event.text.strip():
             if recent_buttons:
+                if is_group_context:
+                    result_text = "**Recent Group Members:**\nClick any user below to whisper them!\n\nOr type: `message @username`"
+                else:
+                    result_text = "**Recent Users:**\nClick any user below to whisper them!\n\nOr type: `message @username`"
+                
                 result = event.builder.article(
-                    title="🚀 Quick Send to Recent Users",
-                    description="Select recent user or type manually",
+                    title="🤫 Whisper Bot - Quick Send",
+                    description="Send to recent users or type manually",
                     text=result_text,
-                    buttons=recent_buttons + [
-                        [Button.switch_inline("✏️ Type Message", query="")]
-                    ]
+                    buttons=recent_buttons
                 )
             else:
                 result = event.builder.article(
-                    title="🚀 Send Whisper",
-                    description="Type: message @username",
-                    text=result_text,
-                    buttons=[[Button.switch_inline("✏️ Start Typing", query="")]]
+                    title="🤫 Whisper Bot - Send Secret Messages",
+                    description="Usage: your_message @username",
+                    text="**Usage:** `your_message @username`\n\n**Example:** `Hello! @username`\n\n🔒 Only they can read!",
+                    buttons=[[Button.switch_inline("🚀 Try Now", query="")]]
                 )
-            
             await event.answer([result])
             return
         
-        # Process the query text
-        # Extract ANY username or user ID
-        username_match = re.search(r'@(\w+)', query_text)
-        userid_match = re.search(r'(\d{8,})', query_text)
+        text = event.text.strip()
         
+        # If user clicked group user button, it will come as data, handle separately
+        patterns = [r'@(\w+)$', r'(\d+)$']
         target_user = None
-        message_text = query_text
+        message_text = text
         
-        if username_match:
-            target_user = username_match.group(1)
-            message_text = re.sub(r'@' + re.escape(target_user) + r'\b', '', query_text).strip()
-            target_display = f"@{target_user}"
-            
-        elif userid_match:
-            target_user = userid_match.group(1)
-            message_text = re.sub(r'\b' + re.escape(target_user) + r'\b', '', query_text).strip()
-            target_display = target_user
-            
-        else:
-            # No user mentioned
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                if pattern == r'@(\w+)$':
+                    target_user = match.group(1)
+                    message_text = text.replace(f"@{target_user}", "").strip()
+                else:
+                    target_user = match.group(1)
+                    message_text = text.replace(target_user, "").strip()
+                break
+        
+        if not target_user or not message_text:
             result = event.builder.article(
-                title="❌ Add Recipient",
-                description="Add @username or user ID",
-                text="**Add recipient at end:**\n\n`your_message @username`\nOR\n`your_message 123456789`\n\n**Examples:**\n• `Hello @username`\n• `Hi 123456789`",
-                buttons=[[Button.switch_inline("🔄 Try Again", query=query_text)]]
+                title="❌ Invalid Format",
+                description="Use: message @username OR message 123456789",
+                text="**Usage:** `your_message @username`\n\n**Examples:**\n• `Hello! @username`\n• `I miss you 123456789`",
+                buttons=[[Button.switch_inline("🔄 Try Again", query=text)]]
             )
             await event.answer([result])
             return
         
-        # Check if message is empty
-        if not message_text:
-            result = event.builder.article(
-                title="❌ Message Required",
-                description="Type a message first",
-                text="**Please type a message!**\n\n**Example:** `Hello @username`",
-                buttons=[[Button.switch_inline("🔄 Try Again", query="")]]
-            )
-            await event.answer([result])
-            return
-        
-        # Check message length
         if len(message_text) > 1000:
             result = event.builder.article(
                 title="❌ Message Too Long",
-                description="Max 1000 characters",
-                text="❌ Message too long! Keep under 1000 characters."
+                description="Maximum 1000 characters allowed",
+                text="❌ Your message is too long! Please keep it under 1000 characters."
             )
             await event.answer([result])
             return
         
-        # Create message ID
-        message_id = f'msg_{sender_id}_{int(datetime.now().timestamp())}_{target_user}'
-        
-        # Try to get user info
-        user_info = None
-        sender_name = "Anonymous"
-        try:
-            sender = await bot.get_entity(sender_id)
-            sender_name = getattr(sender, 'first_name', 'Someone')
-        except:
-            pass
-        
         try:
             if target_user.isdigit():
-                user_obj = await bot.get_entity(int(target_user))
-                user_info = {
-                    'id': user_obj.id,
-                    'first_name': getattr(user_obj, 'first_name', 'User'),
-                    'username': getattr(user_obj, 'username', None),
-                    'is_valid': True
-                }
+                user_obj = await client.get_entity(int(target_user))
             else:
-                user_obj = await bot.get_entity(target_user)
-                user_info = {
-                    'id': user_obj.id,
-                    'first_name': getattr(user_obj, 'first_name', 'User'),
-                    'username': getattr(user_obj, 'username', None),
-                    'is_valid': True
-                }
+                if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]{3,30}$', target_user):
+                    result = event.builder.article(
+                        title="❌ Invalid Username",
+                        description="Username format is invalid",
+                        text="**Valid username format:**\n• Starts with letter\n• 4-31 characters\n• Letters, numbers, underscores only"
+                    )
+                    await event.answer([result])
+                    return
+                
+                user_obj = await client.get_entity(target_user)
             
-            target_name = user_info['first_name']
-            target_username = user_info.get('username')
+            if not hasattr(user_obj, 'first_name'):
+                result = event.builder.article(
+                    title="❌ Not a User",
+                    description="You can only send to users",
+                    text="This appears to be a channel or group. Please mention a user instead."
+                )
+                await event.answer([result])
+                return
             
-            # Add to recent users
-            add_to_recent_users(
-                sender_id,
-                user_info['id'],
-                user_info.get('username'),
-                user_info.get('first_name', 'User')
-            )
+            # Add to appropriate recent list
+            if is_group_context:
+                # Update group user history
+                chat_id = event.chat_id
+                add_user_to_group_history(
+                    chat_id,
+                    user_obj.id,
+                    getattr(user_obj, 'username', None),
+                    getattr(user_obj, 'first_name', 'User')
+                )
+            else:
+                add_to_recent_users(
+                    event.sender_id, 
+                    user_obj.id, 
+                    getattr(user_obj, 'username', None),
+                    getattr(user_obj, 'first_name', 'User')
+                )
             
         except Exception as e:
-            logger.warning(f"User lookup failed: {e}")
-            # Create placeholder for invalid user
-            user_info = {
-                'id': 0,
-                'first_name': target_user,
-                'username': target_user if not target_user.isdigit() else None,
-                'is_valid': False
-            }
-            target_name = target_user
-            target_username = target_user if not target_user.isdigit() else None
+            logger.error(f"Error getting user entity: {e}")
+            result = event.builder.article(
+                title="❌ User Not Found",
+                description="User not found or invalid",
+                text="❌ User not found! Please check username or user ID."
+            )
+            await event.answer([result])
+            return
         
-        # Save as last target
-        save_user_last_target(sender_id, user_info)
-        
-        # Store message
+        message_id = f'msg_{event.sender_id}_{user_obj.id}_{int(datetime.now().timestamp())}'
         messages_db[message_id] = {
-            'message_id': message_id,
-            'target_display': target_display,
+            'user_id': user_obj.id,
             'msg': message_text,
-            'sender_id': sender_id,
-            'sender_name': sender_name,
+            'sender_id': event.sender_id,
             'timestamp': datetime.now().isoformat(),
-            'target_name': target_name,
-            'target_username': target_username,
-            'target_raw': target_user,
-            'user_info': user_info,
-            'is_valid_user': user_info.get('is_valid', False)
+            'target_name': getattr(user_obj, 'first_name', 'User'),
+            'is_group': is_group_context,
+            'group_id': event.chat_id if is_group_context else None
         }
         
-        # Save whisper for owner viewing
-        save_whisper_for_owner({
-            'message_id': message_id,
-            'sender_id': sender_id,
-            'sender_name': sender_name,
-            'target_name': target_name,
-            'target_username': target_username,
-            'message': message_text,
-            'is_valid_user': user_info.get('is_valid', False)
-        })
-        
-        # Create result
-        preview_msg = message_text[:80] + ("..." if len(message_text) > 80 else "")
-        
-        if user_info.get('is_valid'):
-            target_display_final = f"@{target_username}" if target_username else target_name
-            result_text = f"**🔐 Whisper for {target_name}**\n\n"
-            result_text += f"**Message:** {preview_msg}\n\n"
-            result_text += f"*Only {target_name} can read this*"
-        else:
-            result_text = f"**📨 Send to '{target_name}'**\n\n"
-            result_text += f"**Message:** {preview_msg}\n\n"
-            result_text += "*User verification skipped*"
-        
+        target_name = getattr(user_obj, 'first_name', 'User')
         result = event.builder.article(
-            title=f"📤 Send to {target_name}",
-            description="Click to send secret message",
-            text=result_text,
-            buttons=[[Button.inline("🔓 Send Whisper", message_id)]]
+            title=f"🔒 Secret Message for {target_name}",
+            description=f"Click to send secret message",
+            text=f"**🔐 A secret message for {target_name}!**\n\n*Note: Only {target_name} can open this message.*",
+            buttons=[[Button.inline("🔓 Show Message", message_id)]]
         )
         
         await event.answer([result])
@@ -647,20 +807,20 @@ async def inline_handler(event):
         result = event.builder.article(
             title="❌ Error",
             description="Something went wrong",
-            text="❌ An error occurred. Please try again."
+            text="❌ An error occurred. Please try again in a moment."
         )
         await event.answer([result])
+
+# ============ MODIFIED CALLBACK HANDLER ============
 
 @bot.on(events.CallbackQuery)
 async def callback_handler(event):
     try:
         data = event.data.decode('utf-8')
-        sender_id = event.sender_id
         
         if data == "help":
             bot_username = (await bot.get_me()).username
-            bot_type = "Main Bot" if IS_MAIN_BOT else "Your Bot"
-            help_text = HELP_TEXT.format(bot_username, bot_username, bot_username, bot_type)
+            help_text = HELP_TEXT.format(bot_username, bot_username, bot_username)
             
             await event.edit(
                 help_text,
@@ -671,203 +831,231 @@ async def callback_handler(event):
             )
         
         elif data == "admin_stats":
-            if sender_id != ADMIN_ID:
+            if event.sender_id != ADMIN_ID:
                 await event.answer("❌ Admin only!", alert=True)
                 return
                 
             total_clones = len(clone_stats)
+            total_groups = len(group_detected)
             stats_text = f"📊 **Admin Statistics**\n\n"
-            stats_text += f"💬 Total Messages: {len(messages_db)}\n"
-            stats_text += f"📨 All Whispers: {len(all_whispers)}\n"
-            stats_text += f"🤖 Total Clones: {total_clones}\n"
             stats_text += f"👥 Recent Users: {len(recent_users)}\n"
-            stats_text += f"📢 Broadcast Status: {'Active' if broadcasting else 'Inactive'}\n"
-            stats_text += f"🤖 Bot Type: {'MAIN' if IS_MAIN_BOT else 'CLONED'}\n\n"
-            stats_text += f"**Status:** ✅ Active\n"
-            stats_text += f"**Time:** {datetime.now().strftime('%H:%M:%S')}"
+            stats_text += f"💬 Total Messages: {len(messages_db)}\n"
+            stats_text += f"🤖 Total Clones: {total_clones}\n"
+            stats_text += f"👥 Groups Detected: {total_groups}\n"
+            stats_text += f"👤 Group Users Tracked: {sum(len(users) for users in group_users_last_5.values())}\n"
+            stats_text += f"🆔 Admin ID: {ADMIN_ID}\n"
+            stats_text += f"🌐 Port: {PORT}\n"
+            stats_text += f"🕒 Last Updated: {datetime.now().strftime('%H:%M:%S')}\n\n"
+            stats_text += f"**Status:** ✅ Running"
             
             await event.edit(
                 stats_text,
-                buttons=[[Button.inline("🔙 Back", data="back_start")]]
-            )
-        
-        elif data == "broadcast_menu":
-            if sender_id not in [ADMIN_ID, OWNER_ID]:
-                await event.answer("❌ Admin only!", alert=True)
-                return
-            
-            broadcast_text = f"""
-📢 **Broadcast Menu**
-
-**Commands:**
-• `/broadcast` - Broadcast replied message
-• `/stop_broadcast` - Stop ongoing broadcast
-• `/bstats` - Broadcast statistics
-• `/announce` - Send text announcement
-• `/ping` - Check bot ping
-
-**Usage:**
-1. Reply to any message with `/broadcast`
-2. Type `/announce your message`
-3. Check status with `/bstats`
-
-**Current Status:**
-👥 Users: {len(recent_users)}
-📨 Whispers: {len(all_whispers)}
-📢 Broadcast: {'Active' if broadcasting else 'Inactive'}
-"""
-            
-            await event.edit(
-                broadcast_text,
                 buttons=[
-                    [Button.inline("📊 Stats", data="admin_stats")],
-                    [Button.inline("🔙 Back", data="back_start")]
-                ]
-            )
-        
-        elif data == "shri_view_all":
-            # OWNER VIEW ALL WHISPERS
-            if sender_id != OWNER_ID:
-                await event.answer("❌ Only Shri can view all whispers!", alert=True)
-                return
-            
-            if not all_whispers:
-                await event.answer("📭 No whispers found yet!", alert=True)
-                return
-            
-            # Show all whispers in pages
-            total_whispers = len(all_whispers)
-            whispers_text = f"👑 **All Whispers ({total_whispers})**\n\n"
-            
-            # Show last 10 whispers
-            recent_whispers = all_whispers[-10:]  # Last 10 whispers
-            for i, whisper in enumerate(recent_whispers, 1):
-                sender_name = whisper.get('sender_name', 'Anonymous')
-                target_name = whisper.get('target_name', 'Unknown')
-                message = whisper.get('message', '')[:50]
-                if len(whisper.get('message', '')) > 50:
-                    message += "..."
-                
-                timestamp = whisper.get('timestamp', '')
-                if timestamp:
-                    try:
-                        dt = datetime.fromisoformat(timestamp)
-                        time_str = dt.strftime("%H:%M")
-                    except:
-                        time_str = "Recent"
-                else:
-                    time_str = "Recent"
-                
-                whispers_text += f"{i}. **From:** {sender_name}\n"
-                whispers_text += f"   **To:** {target_name}\n"
-                whispers_text += f"   **Message:** {message}\n"
-                whispers_text += f"   **Time:** {time_str}\n\n"
-            
-            whispers_text += f"📊 **Total:** {total_whispers} whispers"
-            
-            await event.edit(
-                whispers_text,
-                buttons=[
-                    [Button.inline("🔄 Refresh", data="shri_view_all")],
-                    [Button.inline("📋 Recent Users", data="shri_view_users")],
-                    [Button.inline("🔙 Back", data="back_start")]
-                ]
-            )
-        
-        elif data == "shri_view_users":
-            # OWNER VIEW RECENT USERS
-            if sender_id != OWNER_ID:
-                await event.answer("❌ Owner only!", alert=True)
-                return
-            
-            if not recent_users:
-                await event.answer("👥 No recent users!", alert=True)
-                return
-            
-            users_text = "👥 **Recent Users**\n\n"
-            sorted_users = sorted(recent_users.items(), 
-                                key=lambda x: x[1].get('last_used', ''), 
-                                reverse=True)
-            
-            for i, (user_key, user_data) in enumerate(sorted_users[:15], 1):
-                username = user_data.get('username')
-                first_name = user_data.get('first_name', 'User')
-                user_id = user_data.get('user_id', '?')
-                
-                display = f"@{username}" if username else first_name
-                users_text += f"{i}. {display}\n"
-                users_text += f"   ID: `{user_id}`\n\n"
-            
-            users_text += f"**Total:** {len(recent_users)} users"
-            
-            await event.edit(
-                users_text,
-                buttons=[
-                    [Button.inline("👑 All Whispers", data="shri_view_all")],
+                    [Button.inline("📢 Broadcast", data="broadcast_menu")],
                     [Button.inline("🔙 Back", data="back_start")]
                 ]
             )
         
         elif data == "clone_info":
-            if IS_MAIN_BOT:
-                clone_text = """
-🔧 **Clone Your Own Bot**
+            clone_text = """
+🔧 **Clone Your Own Whisper Bot**
 
-**📌 Important Rules:**
-1. **Only in this Main Bot**
-2. **1 User = 1 Bot only**
-3. **Keep token safe**
-
-**🚀 Steps to Clone:**
-1. Go to @BotFather
-2. Create new bot (/newbot)
-3. Copy bot token
-4. Send here: `/clone your_token`
+**Commands:**
+• `/clone bot_token` - Clone new bot
+• `/remove` - Remove your cloned bot
 
 **Example:**
-`/clone 1234567890:ABCdefGHIjklMNOpqrsTUVwxyz`
+`/clone 1234567890:ABCdefGHIjkl...`
 
-**✅ Your cloned bot will have:**
-• Same instant sending
-• गलत username support  
-• Auto last user display
-• One-step whispers
-• Clone button opens main bot
-"""
-                await event.edit(
-                    clone_text,
-                    buttons=[
-                        [Button.url("🤖 Create Bot", "https://t.me/BotFather")],
-                        [Button.inline("🔙 Back", data="back_start")]
-                    ]
-                )
-            else:
-                # Cloned bot - redirect to main bot
-                await event.edit(
-                    "🔧 **Cloning available in Main Bot only!**\n\n"
-                    "Please go to main bot to clone your own whisper bot.",
-                    buttons=[
-                        [Button.url("🤖 Go to Main Bot", f"https://t.me/{MAIN_BOT_FOR_CLONE}")],
-                        [Button.inline("🔙 Back", data="back_start")]
-                    ]
-                )
+⚠️ **Note:**
+• One bot per user only
+• Keep token safe
+            """
+            await event.edit(
+                clone_text,
+                buttons=[
+                    [Button.url("🤖 BotFather", "https://t.me/BotFather")],
+                    [Button.inline("🔙 Back", data="back_start")]
+                ]
+            )
         
-        elif data == "use_last_target":
-            last_target = get_user_last_target(sender_id)
-            if last_target:
-                target_info = last_target['target']
-                target_name = target_info.get('first_name', 'User')
+        elif data == "broadcast_menu":
+            if event.sender_id != ADMIN_ID:
+                await event.answer("❌ Admin only!", alert=True)
+                return
                 
+            await event.edit(
+                "📢 **Broadcast Menu**\n\n"
+                "Choose broadcast type:",
+                buttons=[
+                    [Button.inline("👤 Broadcast to Users", data="user_broadcast_menu")],
+                    [Button.inline("👥 Broadcast to Groups", data="group_broadcast_menu")],
+                    [Button.inline("📊 Broadcast Stats", data="broadcast_stats")],
+                    [Button.inline("🔙 Back", data="back_start")]
+                ]
+            )
+        
+        elif data == "user_broadcast_menu":
+            if event.sender_id != ADMIN_ID:
+                await event.answer("❌ Admin only!", alert=True)
+                return
+                
+            await event.edit(
+                "👤 **User Broadcast**\n\n"
+                "Send message to all users who interacted with bot.\n\n"
+                "**Commands:**\n"
+                "• `/broadcast message` - Broadcast text\n"
+                "• Reply to message with `/broadcast`",
+                buttons=[
+                    [Button.inline("📊 User Stats", data="broadcast_stats")],
+                    [Button.inline("🔙 Back", data="broadcast_menu")]
+                ]
+            )
+        
+        elif data == "group_broadcast_menu":
+            if event.sender_id != ADMIN_ID:
+                await event.answer("❌ Admin only!", alert=True)
+                return
+                
+            await event.edit(
+                f"👥 **Group Broadcast**\n\n"
+                f"Send message to all detected groups.\n\n"
+                f"📊 **Groups Detected:** {len(group_detected)}\n\n"
+                f"**Commands:**\n"
+                f"• `/gbroadcast message` - Broadcast text\n"
+                f"• Reply to message with `/gbroadcast`",
+                buttons=[
+                    [Button.inline("📊 Group Stats", data="group_stats")],
+                    [Button.inline("🔙 Back", data="broadcast_menu")]
+                ]
+            )
+        
+        elif data == "broadcast_stats":
+            if event.sender_id != ADMIN_ID:
+                await event.answer("❌ Admin only!", alert=True)
+                return
+                
+            # Try to load broadcast history
+            history_text = "📊 **Broadcast History**\n\n"
+            try:
+                if os.path.exists(BROADCAST_HISTORY_FILE):
+                    with open(BROADCAST_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                        history = json.load(f)
+                    
+                    if history:
+                        for broadcast_id, info in list(history.items())[-5:]:  # Last 5
+                            btype = info['type']
+                            timestamp = datetime.fromisoformat(info['timestamp']).strftime("%d/%m %H:%M")
+                            success = info['success']
+                            total = info['total']
+                            
+                            history_text += f"**{btype.upper()}** - {timestamp}\n"
+                            history_text += f"✅ {success}/{total} ({int(success/total*100)}%)\n"
+                            history_text += f"📝 {info['message'][:50]}...\n\n"
+                    else:
+                        history_text += "No broadcast history yet.\n"
+                else:
+                    history_text += "No broadcast history yet.\n"
+            except Exception as e:
+                history_text += f"Error loading history: {str(e)}\n"
+            
+            history_text += f"\n📅 {datetime.now().strftime('%d %B %Y')}"
+            
+            await event.edit(
+                history_text,
+                buttons=[
+                    [Button.inline("👤 User Broadcast", data="user_broadcast_menu")],
+                    [Button.inline("👥 Group Broadcast", data="group_broadcast_menu")],
+                    [Button.inline("🔙 Back", data="broadcast_menu")]
+                ]
+            )
+        
+        elif data == "group_stats":
+            if event.sender_id != ADMIN_ID:
+                await event.answer("❌ Admin only!", alert=True)
+                return
+                
+            group_stats_text = f"👥 **Group Statistics**\n\n"
+            group_stats_text += f"📊 Total Groups: {len(group_detected)}\n"
+            group_stats_text += f"👤 Users Tracked: {sum(len(users) for users in group_users_last_5.values())}\n\n"
+            
+            if group_detected:
+                group_stats_text += "**Active Groups:**\n"
+                for i, group_id in enumerate(list(group_detected)[:10]):  # Show first 10
+                    if group_id in last_group_activity:
+                        last_active = datetime.fromtimestamp(last_group_activity[group_id]).strftime("%d/%m %H:%M")
+                        group_stats_text += f"{i+1}. Group ID: `{group_id}` (Last: {last_active})\n"
+            
+            await event.edit(
+                group_stats_text,
+                buttons=[
+                    [Button.inline("🔄 Refresh", data="group_stats")],
+                    [Button.inline("🔙 Back", data="broadcast_menu")]
+                ]
+            )
+        
+        elif data == "confirm_user_broadcast":
+            if event.sender_id != ADMIN_ID:
+                await event.answer("❌ Admin only!", alert=True)
+                return
+                
+            # Get the message from previous context
+            # For simplicity, we'll ask user to send message again
+            await event.edit(
+                "👤 **User Broadcast Setup**\n\n"
+                "Please send the broadcast message now.\n"
+                "You can use text, photos, or any media.\n\n"
+                "**Format:** `/broadcast your message`\n"
+                "**Or reply:** Reply to a message with `/broadcast`",
+                buttons=[
+                    [Button.inline("🔙 Cancel", data="broadcast_menu")]
+                ]
+            )
+        
+        elif data == "confirm_group_broadcast":
+            if event.sender_id != ADMIN_ID:
+                await event.answer("❌ Admin only!", alert=True)
+                return
+                
+            await event.edit(
+                f"👥 **Group Broadcast Setup**\n\n"
+                f"📊 Groups: {len(group_detected)}\n\n"
+                "Please send the group broadcast message now.\n"
+                "You can use text, photos, or any media.\n\n"
+                "**Format:** `/gbroadcast your message`\n"
+                "**Or reply:** Reply to a message with `/gbroadcast`",
+                buttons=[
+                    [Button.inline("🔙 Cancel", data="broadcast_menu")]
+                ]
+            )
+        
+        elif data.startswith("group_user_"):
+            # Handle group user selection
+            user_query = data.replace("group_user_", "")
+            await event.answer(f"👤 Selected: {user_query}", alert=False)
+            
+            # Switch to inline mode with user query
+            await event.edit(
+                f"🔒 **Send whisper to {user_query}**\n\n"
+                f"Now type your message and send.\n"
+                f"The bot will automatically add {user_query} at the end.",
+                buttons=[[Button.switch_inline(
+                    f"💌 Whisper {user_query}", 
+                    query=f"message {user_query}"
+                )]]
+            )
+        
+        elif data.startswith("clear_group_"):
+            chat_id = int(data.replace("clear_group_", ""))
+            if chat_id in group_users_last_5:
+                group_users_last_5[chat_id] = []
+                save_data()
+                await event.answer("✅ Group user list cleared!", alert=True)
                 await event.edit(
-                    f"**↪️ Last User: {target_name}**\n\n"
-                    f"Now type your message for {target_name}",
-                    buttons=[[Button.switch_inline(
-                        f"💌 Message {target_name}", 
-                        query=f""
-                    )]]
+                    "🧹 **Group user list cleared!**\n\n"
+                    "The recent users list for this group has been reset.",
+                    buttons=[[Button.switch_inline("🚀 Send Whisper", query="")]]
                 )
-            else:
-                await event.answer("No last user found!", alert=True)
         
         elif data.startswith("recent_"):
             user_key = data.replace("recent_", "")
@@ -876,676 +1064,258 @@ async def callback_handler(event):
                 username = user_data.get('username')
                 first_name = user_data.get('first_name', 'User')
                 
-                target_display = f"@{username}" if username else first_name
-                
-                # Save as last target
-                save_user_last_target(sender_id, user_data)
+                if username:
+                    target_text = f"@{username}"
+                else:
+                    target_text = f"{first_name}"
                 
                 await event.edit(
-                    f"**↪️ Selected: {target_display}**\n\n"
-                    f"Now type your message for {first_name}",
+                    f"🔒 **Send whisper to {target_text}**\n\n"
+                    f"Now switch to inline mode and type your message for {target_text}",
                     buttons=[[Button.switch_inline(
-                        f"📝 Message {first_name}", 
-                        query=""
+                        f"💌 Message {target_text}", 
+                        query=f"@{username}" if username else first_name
                     )]]
                 )
             else:
-                await event.answer("User not found!", alert=True)
+                await event.answer("User not found in recent list!", alert=True)
         
         elif data == "back_start":
-            last_target = get_user_last_target(sender_id)
-            
-            buttons = []
-            
-            if IS_MAIN_BOT:
-                buttons.append([
-                    Button.url("📢 Channel", f"https://t.me/{SUPPORT_CHANNEL}"),
-                    Button.url("👥 Group", f"https://t.me/{SUPPORT_GROUP}")
-                ])
+            if event.sender_id == ADMIN_ID:
+                await event.edit(
+                    WELCOME_TEXT,
+                    buttons=[
+                        [Button.url("📢 Support Channel", f"https://t.me/{SUPPORT_CHANNEL}")],
+                        [Button.url("👥 Support Group", f"https://t.me/{SUPPORT_GROUP}")],
+                        [Button.switch_inline("🚀 Try Now", query="")],
+                        [Button.inline("📊 Statistics", data="admin_stats"), Button.inline("📖 Help", data="help")],
+                        [Button.inline("🔧 Clone Bot", data="clone_info")],
+                        [Button.inline("📢 Broadcast", data="broadcast_menu")]
+                    ]
+                )
             else:
-                buttons.append([
-                    Button.url("📢 Main Bot", f"https://t.me/{MAIN_BOT_FOR_CLONE}"),
-                    Button.url("👥 Support", f"https://t.me/{SUPPORT_GROUP}")
-                ])
-            
-            buttons.append([Button.switch_inline("🚀 Send Whisper", query="")])
-            
-            if last_target:
-                target_info = last_target['target']
-                if isinstance(target_info, dict):
-                    target_name = target_info.get('first_name', 'User')
-                    buttons.append([Button.inline(f"↪️ Last: {target_name}", data="use_last_target")])
-            
-            if IS_MAIN_BOT:
-                buttons.append([
-                    Button.inline("📖 Help", data="help"),
-                    Button.inline("🔧 Clone", data="clone_info")
-                ])
-            else:
-                buttons.append([
-                    Button.inline("📖 Help", data="help"),
-                    Button.url("🔧 Clone", f"https://t.me/{MAIN_BOT_FOR_CLONE}")
-                ])
-            
-            if sender_id == OWNER_ID:
-                buttons.append([Button.inline("👑 Shri", data="shri_view_all")])
-            
-            if sender_id == ADMIN_ID and sender_id != OWNER_ID:
-                buttons.append([Button.inline("📊 Stats", data="admin_stats")])
-            
-            # Add broadcast button for admin
-            if sender_id in [ADMIN_ID, OWNER_ID]:
-                buttons.append([Button.inline("📢 Broadcast", data="broadcast_menu")])
-            
-            if IS_MAIN_BOT:
-                await event.edit(WELCOME_TEXT, buttons=buttons)
-            else:
-                bot_username = (await bot.get_me()).username
-                welcome = WELCOME_TEXT.format(bot_username)
-                await event.edit(welcome, buttons=buttons)
+                await event.edit(
+                    WELCOME_TEXT,
+                    buttons=[
+                        [Button.url("📢 Support Channel", f"https://t.me/{SUPPORT_CHANNEL}")],
+                        [Button.url("👥 Support Group", f"https://t.me/{SUPPORT_GROUP}")],
+                        [Button.switch_inline("🚀 Try Now", query="")],
+                        [Button.inline("📖 Help", data="help"), Button.inline("🔧 Clone Bot", data="clone_info")]
+                    ]
+                )
         
         elif data in messages_db:
             msg_data = messages_db[data]
-            user_info = msg_data['user_info']
-            
-            # OWNER CAN READ ALL WHISPERS
-            if sender_id == OWNER_ID:
-                sender_name = msg_data.get('sender_name', 'Anonymous')
-                target_name = msg_data['target_name']
-                target_display = msg_data['target_display']
+            if event.sender_id == msg_data['user_id']:
+                sender_info = ""
+                try:
+                    sender = await bot.get_entity(msg_data['sender_id'])
+                    sender_name = getattr(sender, 'first_name', 'Someone')
+                    sender_info = f"\n\n💌 From: {sender_name}"
+                except:
+                    sender_info = f"\n\n💌 From: Anonymous"
                 
-                response = f"👑 **Owner View**\n\n"
-                response += f"**From:** {sender_name}\n"
-                response += f"**To:** {target_display}\n"
-                response += f"**Message:** {msg_data['msg']}\n\n"
-                response += f"**Time:** {msg_data.get('timestamp', 'Recent')}"
-                
-                if not user_info.get('is_valid'):
-                    response += "\n⚠️ *Invalid user*"
-                
-                await event.answer(response, alert=True)
-                return
-            
-            if sender_id == msg_data['sender_id']:
-                # Sender viewing own message
-                target_display = msg_data['target_display']
-                response = f"📝 **Your Message:**\n{msg_data['msg']}\n\n"
-                response += f"👤 **To:** {target_display}"
-                
-                if not user_info.get('is_valid'):
-                    response += "\n⚠️ *User not verified*"
-                
-                await event.answer(response, alert=True)
-                
+                await event.answer(f"🔓 {msg_data['msg']}{sender_info}", alert=True)
+            elif event.sender_id == msg_data['sender_id']:
+                await event.answer(f"📝 Your message: {msg_data['msg']}\n\n👤 To: {msg_data.get('target_name', 'User')}", alert=True)
             else:
-                # Check if recipient
-                if user_info.get('is_valid') and sender_id == user_info.get('id'):
-                    # Valid recipient
-                    sender_name = msg_data.get('sender_name', 'Anonymous')
-                    
-                    response = f"🔓 **Secret Message:**\n{msg_data['msg']}\n\n"
-                    response += f"💌 **From:** {sender_name}"
-                    
-                    await event.answer(response, alert=True)
-                    
-                elif not user_info.get('is_valid'):
-                    # Invalid user - anyone can view
-                    sender_name = msg_data.get('sender_name', 'Anonymous')
-                    
-                    response = f"📨 **Message for {msg_data['target_name']}:**\n{msg_data['msg']}\n\n"
-                    response += f"💌 **From:** {sender_name}\n"
-                    response += "⚠️ *Sent to unverified user*"
-                    
-                    await event.answer(response, alert=True)
-                    
-                else:
-                    # Wrong person
-                    await event.answer("🔒 This message is not for you!", alert=True)
+                await event.answer("🔒 This message is not for you!", alert=True)
         
         else:
             await event.answer("❌ Invalid button!", alert=True)
             
     except Exception as e:
         logger.error(f"Callback error: {e}")
-        await event.answer("❌ Error occurred.", alert=True)
+        await event.answer("❌ An error occurred. Please try again.", alert=True)
 
-# Broadcast Commands
-@bot.on(events.NewMessage(pattern='/broadcast'))
-async def broadcast_handler(event):
-    """Broadcast message to all users"""
-    global broadcasting
-    
-    # Check if user is admin
-    if event.sender_id not in [ADMIN_ID, OWNER_ID]:
-        await event.reply("❌ Admin only command!")
-        return
-    
-    if not event.is_reply:
-        await event.reply("❌ Please reply to a message with /broadcast")
-        return
-    
-    if broadcasting:
-        await event.reply("📢 Broadcast is already in progress!")
-        return
-    
-    # Get the replied message
-    replied_msg = await event.get_reply_message()
-    
-    # Get all users from recent_users
-    if not recent_users:
-        await event.reply("❌ No users found to broadcast!")
-        return
-    
-    broadcasting = True
-    sent_msg = await event.reply(f"📢 **Starting Broadcast**\n\n👥 Users: {len(recent_users)}\n🔄 Status: Sending...")
-    
-    success_count = 0
-    fail_count = 0
-    fail_list = []
-    
-    # Send to all recent users
-    for user_key, user_data in recent_users.items():
-        if not broadcasting:
-            break
-            
-        user_id = user_data.get('user_id')
-        if not user_id:
-            continue
-            
-        try:
-            # Try to send the message
-            await bot.send_message(user_id, replied_msg)
-            success_count += 1
-            await asyncio.sleep(0.5)  # Avoid flood
-            
-            # Update progress every 10 messages
-            if success_count % 10 == 0:
-                await sent_msg.edit(f"📢 **Broadcasting...**\n\n✅ Sent: {success_count}\n❌ Failed: {fail_count}\n📊 Total: {len(recent_users)}")
-                
-        except Exception as e:
-            fail_count += 1
-            fail_list.append(f"{user_id}: {str(e)[:50]}")
-            continue
-    
-    broadcasting = False
-    
-    # Create result message
-    result_text = f"""
-📢 **Broadcast Complete!**
+# ============ NEW: GROUP DETECTION EVENT ============
 
-✅ Successful: {success_count}
-❌ Failed: {fail_count}
-📊 Total Users: {len(recent_users)}
-
-**Status:** ✅ Completed
-    """
-    
-    if fail_list:
-        fail_text = "\n".join(fail_list[:20])  # Show first 20 failures
-        if len(fail_list) > 20:
-            fail_text += f"\n... and {len(fail_list) - 20} more"
-        
-        result_text += f"\n\n**Failed Users (first 20):**\n{fail_text}"
-    
-    await sent_msg.edit(result_text)
-    
-    # Log to owner
-    if OWNER_ID and event.sender_id != OWNER_ID:
-        try:
-            await bot.send_message(
-                OWNER_ID,
-                f"📢 **Broadcast Report**\n\n"
-                f"👤 Sent by: {event.sender_id}\n"
-                f"✅ Successful: {success_count}\n"
-                f"❌ Failed: {fail_count}\n"
-                f"📊 Total: {len(recent_users)}"
-            )
-        except:
-            pass
-
-@bot.on(events.NewMessage(pattern='/stop_broadcast'))
-async def stop_broadcast_handler(event):
-    """Stop ongoing broadcast"""
-    global broadcasting
-    
-    if event.sender_id not in [ADMIN_ID, OWNER_ID]:
-        await event.reply("❌ Admin only command!")
-        return
-    
-    if not broadcasting:
-        await event.reply("❌ No broadcast in progress!")
-        return
-    
-    broadcasting = False
-    await event.reply("🛑 Broadcast stopped!")
-
-@bot.on(events.NewMessage(pattern='/bstats'))
-async def broadcast_stats_handler(event):
-    """Show broadcast statistics"""
-    if event.sender_id not in [ADMIN_ID, OWNER_ID]:
-        await event.reply("❌ Admin only command!")
-        return
-    
-    total_users = len(recent_users)
-    active_users = sum(1 for user_data in recent_users.values() 
-                      if user_data.get('user_id', 0) > 0)
-    
-    stats_text = f"""
-📊 **Broadcast Statistics**
-
-👥 Total Users: {total_users}
-✅ Active Users: {active_users}
-📨 Total Whispers: {len(all_whispers)}
-🤖 Total Clones: {len(clone_stats)}
-🔄 Broadcast Status: {'Active' if broadcasting else 'Inactive'}
-
-**User Distribution:**
-• Recent Users (20 max): {len(recent_users)}
-• Last Targets: {len(user_last_targets)}
-• Clone Owners: {len(user_clone_tokens)}
-
-**Last Updated:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-    """
-    
-    await event.reply(stats_text)
-
-@bot.on(events.NewMessage(pattern='/announce'))
-async def announce_handler(event):
-    """Send announcement to all users"""
-    if event.sender_id not in [ADMIN_ID, OWNER_ID]:
-        await event.reply("❌ Admin only command!")
-        return
-    
-    # Get announcement text
-    args = event.text.split(maxsplit=1)
-    if len(args) < 2:
-        await event.reply("❌ Usage: /announce [your message]")
-        return
-    
-    announcement = args[1]
-    
-    if not recent_users:
-        await event.reply("❌ No users found to announce!")
-        return
-    
-    sent_msg = await event.reply(f"📢 **Sending Announcement**\n\n👥 Users: {len(recent_users)}\n🔄 Sending...")
-    
-    success_count = 0
-    fail_count = 0
-    
-    # Send to all recent users
-    for user_key, user_data in recent_users.items():
-        user_id = user_data.get('user_id')
-        if not user_id:
-            continue
-            
-        try:
-            await bot.send_message(
-                user_id,
-                f"📢 **Announcement**\n\n{announcement}\n\n_Bot Admin_"
-            )
-            success_count += 1
-            await asyncio.sleep(0.3)
-            
-        except Exception as e:
-            fail_count += 1
-            continue
-    
-    result_text = f"""
-📢 **Announcement Sent!**
-
-✅ Successful: {success_count}
-❌ Failed: {fail_count}
-📊 Total Users: {len(recent_users)}
-
-**Message:**
-{announcement[:200]}{'...' if len(announcement) > 200 else ''}
-    """
-    
-    await sent_msg.edit(result_text)
-
-@bot.on(events.NewMessage(pattern='/ping'))
-async def ping_handler(event):
-    """Check bot ping"""
-    start = datetime.now()
-    msg = await event.reply("🏓 Pong!")
-    end = datetime.now()
-    ping_time = (end - start).microseconds / 1000
-    
-    await msg.edit(f"🏓 Pong! `{ping_time:.2f}ms`\n\n🤖 Bot: @{(await bot.get_me()).username}\n🔗 Host: Render")
-
-# Clone commands only in main bot
-@bot.on(events.NewMessage(pattern='/clone'))
-async def clone_handler(event):
-    """Clone bot - ONLY IN MAIN BOT"""
-    if not IS_MAIN_BOT:
-        await event.reply(
-            "🔧 **Cloning available in Main Bot only!**\n\n"
-            "Please use the main bot @upspbot to clone your own whisper bot.",
-            buttons=[[Button.url("🤖 Go to Main Bot", f"https://t.me/{MAIN_BOT_FOR_CLONE}")]]
-        )
-        return
-    
-    clone_text = """
-🔧 **Bot Cloning System**
-
-**📌 Important Rules:**
-1. **Only in Main Bot** - Clone here only
-2. **1 User = 1 Bot** - One bot per user
-3. **Token Safety** - Never share token
-
-**🚀 Steps to Clone:**
-1. Go to @BotFather
-2. Create new bot
-3. Copy bot token
-4. Send here: `/clone your_token`
-
-**Example:**
-`/clone 1234567890:ABCdefGHIjklMNOpqrsTUVwxyz`
-
-**✅ Your cloned bot will have:**
-• Same instant sending
-• गलत username support  
-• Auto last user display
-• One-step whispers
-• Clone button opens main bot
-"""
-    
-    await event.reply(
-        clone_text,
-        buttons=[
-            [Button.url("🤖 Create Bot", "https://t.me/BotFather")],
-            [Button.inline("🔙 Back", data="back_start")]
-        ]
-    )
-
-@bot.on(events.NewMessage(pattern=r'/clone\s+(\S+)'))
-async def clone_token_handler(event):
-    """Handle bot token cloning - ONLY IN MAIN BOT"""
-    if not IS_MAIN_BOT:
-        await event.reply(
-            "❌ **Cloning not available here!**\n\n"
-            "Please use the main bot @upspbot to clone your bot.",
-            buttons=[[Button.url("🤖 Main Bot", f"https://t.me/{MAIN_BOT_FOR_CLONE}")]]
-        )
-        return
-    
-    user_id = event.sender_id
-    token = event.pattern_match.group(1).strip()
-    
-    # Check if user already has a bot
-    if str(user_id) in user_clone_tokens:
-        existing_token = user_clone_tokens[str(user_id)]
-        existing_bot = clone_stats.get(existing_token, {})
-        existing_username = existing_bot.get('username', 'your bot')
-        
-        await event.reply(
-            f"❌ **You already have a cloned bot!**\n\n"
-            f"🤖 Your Bot: @{existing_username}\n\n"
-            f"Each user can only clone one bot.\n"
-            f"Use `/remove` to remove your current bot first.",
-            buttons=[[Button.inline("🗑 Remove Bot", data="remove_confirm")]]
-        )
-        return
-    
-    # Validate token format
-    if not re.match(r'^\d+:[A-Za-z0-9_-]+$', token):
-        await event.reply(
-            "❌ **Invalid Token Format!**\n\n"
-            "Please check your bot token.\n"
-            "Format: `1234567890:ABCdefGHIjklMNOpqrsTUVwxyz`",
-            buttons=[[Button.inline("🔄 Try Again", data="clone_info")]]
-        )
-        return
-    
-    # Check if token already used
-    if token in clone_stats:
-        await event.reply(
-            "❌ **This bot is already cloned!**\n\n"
-            "Please create a new bot with @BotFather.",
-            buttons=[[Button.url("🤖 Create New", "https://t.me/BotFather")]]
-        )
-        return
-    
-    creating_msg = await event.reply("🔄 **Creating your bot...**")
-    
+@bot.on(events.ChatAction)
+async def chat_action_handler(event):
+    """Detect when bot is added to a group"""
     try:
-        # Create user bot instance
-        user_bot = TelegramClient(f'user_bot_{user_id}', API_ID, API_HASH)
-        await user_bot.start(bot_token=token)
-        
-        # Get bot info
-        bot_me = await user_bot.get_me()
-        
-        # Store bot instance
-        user_bots[token] = user_bot
-        
-        # Save clone stats
-        user_mention = f"[{event.sender.first_name}](tg://user?id={user_id})"
-        clone_stats[token] = {
-            'owner_id': user_id,
-            'username': bot_me.username,
-            'bot_id': bot_me.id,
-            'owner_name': getattr(event.sender, 'first_name', ''),
-            'owner_mention': user_mention,
-            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'token_preview': token[:10] + '...'
-        }
-        
-        # Save user clone token
-        user_clone_tokens[str(user_id)] = token
-        
-        save_data()
-        
-        # Success message
-        await creating_msg.edit(
-            f"✅ **Bot Cloned Successfully!**\n\n"
-            f"🤖 **Your Bot:** @{bot_me.username}\n"
-            f"🎉 Now active with all whisper features!\n\n"
-            f"**Features in your bot:**\n"
-            f"• Instant username detection\n"
-            f"• गलत username support\n"
-            f"• Last user display\n"
-            f"• Clone button opens main bot\n\n"
-            f"**Try your bot:**\n"
-            f"`@{bot_me.username} message @username`",
-            buttons=[
-                [Button.switch_inline("🚀 Test Your Bot", query="", same_peer=True)],
-                [Button.inline("🔙 Back", data="back_start")]
-            ]
-        )
-        
-        # Notify owner
-        if OWNER_ID:
-            try:
-                await bot.send_message(
-                    OWNER_ID,
-                    f"🆕 **New Bot Cloned!**\n\n"
-                    f"🤖 **Bot:** @{bot_me.username}\n"
-                    f"👤 **User:** {getattr(event.sender, 'first_name', 'User')}\n"
-                    f"🆔 **User ID:** `{user_id}`\n"
-                    f"📅 **Time:** {datetime.now().strftime('%H:%M:%S')}\n"
-                    f"🔢 **Total Clones:** {len(clone_stats)}",
-                    parse_mode='markdown'
+        if event.user_added or event.user_joined:
+            me = await bot.get_me()
+            if me.id in event.user_ids:
+                # Bot was added to a group
+                chat = await event.get_chat()
+                chat_id = chat.id
+                
+                logger.info(f"🤖 Bot added to group: {chat_id} - {chat.title}")
+                
+                # Add to detected groups
+                group_detected.add(chat_id)
+                last_group_activity[chat_id] = datetime.now().timestamp()
+                save_data()
+                
+                # Send welcome message
+                welcome_msg = (
+                    f"🤫 **Whisper Bot has been added to this group!**\n\n"
+                    f"🔒 **Features:**\n"
+                    f"• Send anonymous whispers to group members\n"
+                    f"• Only the intended recipient can read\n"
+                    f"• Recent members appear automatically\n\n"
+                    f"**Usage:**\n"
+                    f"1. Type `@{me.username}` in chat\n"
+                    f"2. Write your message\n"
+                    f"3. Add @username at the end\n"
+                    f"4. Send!\n\n"
+                    f"**Example:** `@{me.username} Hello! @username`\n\n"
+                    f"🎯 **Try it now using the button below!**"
                 )
-            except:
-                pass
+                
+                await event.reply(
+                    welcome_msg,
+                    buttons=[
+                        [Button.switch_inline("🚀 Send Whisper", query="", same_peer=True)],
+                        [Button.url("📢 Channel", f"https://t.me/{SUPPORT_CHANNEL}")],
+                        [Button.url("👥 Support", f"https://t.me/{SUPPORT_GROUP}")]
+                    ]
+                )
+    except Exception as e:
+        logger.error(f"Chat action error: {e}")
+
+# ============ MODIFIED GROUP MESSAGE HANDLER ============
+
+@bot.on(events.NewMessage(incoming=True))
+async def message_handler(event):
+    """Track users in groups"""
+    try:
+        if event.is_group or event.is_channel:
+            chat_id = event.chat_id
+            
+            # Track the user who sent message
+            if event.sender_id and event.sender_id > 0:  # Not a bot or channel
+                add_user_to_group_history(
+                    chat_id,
+                    event.sender_id,
+                    event.sender.username,
+                    event.sender.first_name
+                )
                 
     except Exception as e:
-        logger.error(f"Clone error: {e}")
-        await creating_msg.edit(
-            f"❌ **Clone Failed!**\n\n"
-            f"Error: {str(e)[:200]}\n\n"
-            f"Please check:\n"
-            f"1. Token is correct\n"
-            f"2. Bot is created with @BotFather\n"
-            f"3. Bot token is valid",
-            buttons=[[Button.inline("🔄 Try Again", data="clone_info")]]
-        )
+        pass  # Silently ignore tracking errors
 
-@bot.on(events.NewMessage(pattern='/remove'))
-async def remove_handler(event):
-    """Remove user's cloned bot - ONLY IN MAIN BOT"""
-    if not IS_MAIN_BOT:
-        await event.reply(
-            "🗑 **Remove bot in Main Bot only!**\n\n"
-            "Please use the main bot @upspbot to remove your bot.",
-            buttons=[[Button.url("🤖 Main Bot", f"https://t.me/{MAIN_BOT_FOR_CLONE}")]]
-        )
-        return
-    
-    user_id = event.sender_id
-    user_id_str = str(user_id)
-    
-    if user_id_str not in user_clone_tokens:
-        await event.reply(
-            "❌ **No bot to remove!**\n\n"
-            "You haven't cloned any bot yet.\n"
-            "Use `/clone` to create your bot.",
-            buttons=[[Button.inline("🔧 Clone Bot", data="clone_info")]]
-        )
-        return
-    
-    token = user_clone_tokens[user_id_str]
-    bot_info = clone_stats.get(token, {})
-    bot_username = bot_info.get('username', 'your_bot')
-    
-    await event.reply(
-        f"🗑 **Remove Bot Confirmation**\n\n"
-        f"🤖 Bot: @{bot_username}\n"
-        f"⚠️ This action cannot be undone!\n\n"
-        f"Are you sure you want to remove your bot?",
-        buttons=[
-            [Button.inline("✅ Yes, Remove", data=f"confirm_remove_{user_id}")],
-            [Button.inline("❌ Cancel", data="back_start")]
-        ]
+# Flask web server (same as before with added stats)
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>ShriBots Whisper Bot</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+            .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            h1 { color: #333; text-align: center; }
+            .status { background: #4CAF50; color: white; padding: 10px; border-radius: 5px; text-align: center; margin: 20px 0; }
+            .info { background: #2196F3; color: white; padding: 15px; border-radius: 5px; margin: 10px 0; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🤖 ShriBots Whisper Bot</h1>
+            <div class="status">✅ Bot is Running Successfully</div>
+            <div class="info">
+                <strong>📊 Statistics:</strong><br>
+                Recent Users: {}<br>
+                Total Messages: {}<br>
+                Total Clones: {}<br>
+                Groups Detected: {}<br>
+                Group Users: {}<br>
+                Server Time: {}
+            </div>
+            <p>This bot allows you to send anonymous secret messages to Telegram users.</p>
+            <p><strong>New Features:</strong></p>
+            <ul>
+                <li>📢 Broadcast to all users (/broadcast)</li>
+                <li>👥 Broadcast to groups (/gbroadcast)</li>
+                <li>🤖 Auto-detect when added to groups</li>
+                <li>👤 Show recent group members in whispers</li>
+            </ul>
+            <p><strong>Usage:</strong> Use inline mode in any chat: <code>@{} your_message @username</code></p>
+        </div>
+    </body>
+    </html>
+    """.format(
+        len(recent_users), 
+        len(messages_db),
+        len(clone_stats),
+        len(group_detected),
+        sum(len(users) for users in group_users_last_5.values()),
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        (bot.get_me()).wait().username if bot.is_connected() else "bot_username"
     )
 
-@bot.on(events.NewMessage(pattern='/mybot'))
-async def mybot_handler(event):
-    """Show user's bot info - ONLY IN MAIN BOT"""
-    if not IS_MAIN_BOT:
-        await event.reply(
-            "🤖 **Bot info in Main Bot only!**\n\n"
-            "Please use the main bot @upspbot to see your bot info.",
-            buttons=[[Button.url("🤖 Main Bot", f"https://t.me/{MAIN_BOT_FOR_CLONE}")]]
-        )
-        return
-    
-    user_id = event.sender_id
-    user_id_str = str(user_id)
-    
-    if user_id_str not in user_clone_tokens:
-        await event.reply(
-            "❌ **No bot found!**\n\n"
-            "You haven't cloned any bot yet.\n"
-            "Use `/clone` to create your own whisper bot.",
-            buttons=[[Button.inline("🔧 Clone Bot", data="clone_info")]]
-        )
-        return
-    
-    token = user_clone_tokens[user_id_str]
-    bot_info = clone_stats.get(token, {})
-    bot_username = bot_info.get('username', 'Unknown')
-    created_at = bot_info.get('created_at', 'Unknown')
-    
-    bot_info_text = f"""
-🤖 **Your Bot Information:**
+@app.route('/health')
+def health():
+    return json.dumps({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "recent_users": len(recent_users),
+        "total_messages": len(messages_db),
+        "total_clones": len(clone_stats),
+        "groups_detected": len(group_detected),
+        "group_users": sum(len(users) for users in group_users_last_5.values()),
+        "bot_connected": bot.is_connected()
+    })
 
-👤 **Owner:** You
-🤖 **Bot:** @{bot_username}
-🆔 **Bot ID:** `{bot_info.get('bot_id', 'Unknown')}`
-📅 **Created:** {created_at}
-🔗 **Status:** ✅ Active
+def run_flask():
+    """Run Flask web server"""
+    logger.info(f"🌐 Starting Flask server on port {PORT}")
+    app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
 
-**Features:**
-• Instant username detection
-• गलत username support  
-• Last user display
-• One-step whispers
-
-**Usage:**
-`@{bot_username} message @username`
-"""
-    
-    await event.reply(
-        bot_info_text,
-        buttons=[
-            [Button.switch_inline(f"🚀 Use @{bot_username}", query="", same_peer=True)],
-            [Button.inline("🗑 Remove Bot", data="remove_confirm")],
-            [Button.inline("🔙 Back", data="back_start")]
-        ]
-    )
+# Start Flask in background thread
+flask_thread = threading.Thread(target=run_flask)
+flask_thread.daemon = True
+flask_thread.start()
 
 async def main():
-    """Main function to run the bot"""
+    """Main function to start the bot"""
     try:
-        # Get bot info
         me = await bot.get_me()
-        logger.info(f"🤖 Bot: @{me.username} ({'MAIN' if IS_MAIN_BOT else 'CLONED'})")
-        logger.info(f"👑 Owner ID: {OWNER_ID}")
-        logger.info(f"👤 Admin ID: {ADMIN_ID}")
-        logger.info(f"✅ Features Active:")
-        logger.info("   ⚡ Instant username detection")
-        logger.info("   ✅ गलत username/ID support")
-        logger.info("   🔄 Auto last user display")
-        logger.info("   🎯 One-step sending")
-        logger.info("   👑 Owner can read all whispers")
-        logger.info("   📢 Admin broadcast system")
-        if IS_MAIN_BOT:
-            logger.info("   🤖 Clone system active")
-        logger.info(f"📊 Recent Users: {len(recent_users)}")
-        logger.info(f"💬 Total Whispers: {len(all_whispers)}")
-        
-        # Render-specific info
-        logger.info("🔗 Host: Render (Background Worker)")
-        logger.info("🚀 Bot started successfully!")
-        
-        print(f"""
-{'='*60}
-🤖 WHISPER BOT v4.0 - RENDER EDITION
-{'='*60}
-Bot: @{me.username}
-Type: {'MAIN' if IS_MAIN_BOT else 'CLONED'}
-Owner: {OWNER_ID}
-Admin: {ADMIN_ID}
-Host: Render Background Worker
-Status: ✅ Running
-{'='*60}
-        """)
-        
-        # Keep the bot running
-        await bot.run_until_disconnected()
-        
+        logger.info(f"🎭 ShriBots Whisper Bot Started!")
+        logger.info(f"🤖 Bot: @{me.username}")
+        logger.info(f"🆔 Bot ID: {me.id}")
+        logger.info(f"👑 Admin: {ADMIN_ID}")
+        logger.info(f"👥 Recent Users: {len(recent_users)}")
+        logger.info(f"🤖 Total Clones: {len(clone_stats)}")
+        logger.info(f"👥 Groups Detected: {len(group_detected)}")
+        logger.info(f"🌐 Web server running on port {PORT}")
+        logger.info("✅ Bot is ready and working!")
+        logger.info("🔗 Use /start to begin")
+        logger.info("📢 New: Broadcast features added for admin!")
     except Exception as e:
-        logger.error(f"❌ Error: {e}")
+        logger.error(f"❌ Error in main: {e}")
         raise
 
 if __name__ == '__main__':
-    print("""
-╔══════════════════════════════════════════════╗
-║     🤫 WHISPER BOT v4.0 - RENDER EDITION    ║
-║     Owner: Shri | All Whispers              ║
-║     Admin Broadcast System                  ║
-║     Render Background Worker                ║
-╚══════════════════════════════════════════════╝
-    """)
+    print("🚀 Starting ShriBots Whisper Bot...")
+    print(f"📝 Environment: API_ID={API_ID}, PORT={PORT}")
     
     try:
         # Start the bot
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        bot.start()
+        bot.loop.run_until_complete(main())
         
-        with bot:
-            loop.run_until_complete(main())
-            
+        print("✅ Bot started successfully!")
+        print("🔄 Bot is now running...")
+        print("📢 New Features Added:")
+        print("   • /broadcast - Broadcast to all users")
+        print("   • /gbroadcast - Broadcast to groups")
+        print("   • Auto group detection")
+        print("   • Recent group members in whispers")
+        
+        # Keep the bot running
+        bot.run_until_disconnected()
+        
     except KeyboardInterrupt:
         print("\n🛑 Bot stopped by user")
-        save_data()
-        print("💾 Data saved successfully")
     except Exception as e:
+        logger.error(f"❌ Failed to start bot: {e}")
         print(f"❌ Error: {e}")
-        save_data()
     finally:
-        print("👋 Bot shutdown complete")
+        print("💾 Saving data before exit...")
+        save_data()
