@@ -60,7 +60,6 @@ last_group_activity: Dict[int, float] = {}
 
 # Store cloned bot whispers separately
 clone_whispers = {}  # {bot_username: {message_id: message_data}}
-clone_messages = {}  # For cloned bots' messages
 
 # Whisper archive for owner viewing
 whisper_archive = {}  # Store all whispers for owner
@@ -134,7 +133,7 @@ HELP_TEXT = """
 # ============ DATA FUNCTIONS ============
 
 def load_data():
-    global recent_users, clone_stats, group_users_last_5, group_detected, last_group_activity, ACTIVE_CLONE_BOTS, whisper_archive, archive_messages_db, archive_clone_whispers
+    global recent_users, clone_stats, group_users_last_5, group_detected, last_group_activity, ACTIVE_CLONE_BOTS, whisper_archive, archive_messages_db, archive_clone_whispers, clone_whispers
     try:
         if os.path.exists(RECENT_USERS_FILE):
             with open(RECENT_USERS_FILE, 'r', encoding='utf-8') as f:
@@ -165,7 +164,9 @@ def load_data():
                 whisper_archive = archive_data.get('whisper_archive', {})
                 archive_messages_db = archive_data.get('archive_messages_db', {})
                 archive_clone_whispers = archive_data.get('archive_clone_whispers', {})
+                clone_whispers = archive_data.get('clone_whispers', {})
             logger.info(f"✅ Loaded {len(whisper_archive)} archived whispers")
+            logger.info(f"✅ Loaded {len(clone_whispers)} clone whispers")
             
     except Exception as e:
         logger.error(f"❌ Error loading data: {e}")
@@ -178,6 +179,7 @@ def load_data():
         whisper_archive = {}
         archive_messages_db = {}
         archive_clone_whispers = {}
+        clone_whispers = {}
 
 def save_data():
     try:
@@ -201,7 +203,8 @@ def save_data():
             json.dump({
                 'whisper_archive': whisper_archive,
                 'archive_messages_db': archive_messages_db,
-                'archive_clone_whispers': archive_clone_whispers
+                'archive_clone_whispers': archive_clone_whispers,
+                'clone_whispers': clone_whispers
             }, f, indent=2, ensure_ascii=False)
             
     except Exception as e:
@@ -251,6 +254,7 @@ def get_all_whispers():
         
         # Determine sender and target info
         sender_id = whisper_data.get('sender_id')
+        
         if 'user_id' in whisper_data:
             target_id = whisper_data.get('user_id')
             target_name = whisper_data.get('target_name', 'Unknown')
@@ -776,7 +780,7 @@ async def setup_cloned_bot_handlers(client, bot_username: str, owner_id: int):
             # Create whisper ID
             whisper_id = f"clone_{bot_username}_{event.sender_id}_{int(datetime.now().timestamp())}"
             
-            # Store whisper
+            # Store whisper in clone_whispers
             if bot_username not in clone_whispers:
                 clone_whispers[bot_username] = {}
             
@@ -1896,8 +1900,25 @@ async def callback_handler(event):
                     whisper_data = archive_data['data']
                     whisper_type = archive_data['type']
                 else:
-                    await event.answer("❌ Whisper not found in archive!", alert=True)
-                    return
+                    # Try to find in clone whispers
+                    found = False
+                    for bot_username, whispers in clone_whispers.items():
+                        if whisper_id in whispers:
+                            whisper_data = whispers[whisper_id]
+                            whisper_type = f"clone_{bot_username}"
+                            found = True
+                            break
+                    
+                    if not found:
+                        # Try to find in main bot whispers
+                        if whisper_id in messages_db:
+                            whisper_data = messages_db[whisper_id]
+                            whisper_type = "main"
+                            found = True
+                    
+                    if not found:
+                        await event.answer("❌ Whisper not found!", alert=True)
+                        return
                 
                 # Format full message display
                 display_text = f"🔍 **Whisper Details (Owner View)**\n\n"
@@ -2106,6 +2127,39 @@ async def callback_handler(event):
             else:
                 # Someone else trying to open - NOT ALLOWED
                 await event.answer("🔒 This message is not for you!", alert=True)
+        
+        # ============ CLONE BOT WHISPER CALLBACK ============
+        # Check if data is in any clone bot's whispers
+        elif any(data in clone_whispers.get(bot_username, {}) for bot_username in clone_whispers.keys()):
+            # Find which clone bot this whisper belongs to
+            for bot_username, whispers in clone_whispers.items():
+                if data in whispers:
+                    whisper_data = whispers[data]
+                    target_info = whisper_data.get('target_info', {})
+                    
+                    # Check if user is the target or sender
+                    if target_info.get('exists') and event.sender_id == target_info.get('id'):
+                        # Target user opening the message
+                        sender_display = "Anonymous"
+                        try:
+                            # Try to get sender info
+                            if bot_username in user_bots:
+                                clone_client = user_bots[bot_username]['client']
+                                sender = await clone_client.get_entity(whisper_data['sender_id'])
+                                if hasattr(sender, 'first_name'):
+                                    sender_display = sender.first_name
+                        except:
+                            pass
+                        
+                        await event.answer(f"🔓 {whisper_data['message']}\n\n💌 From: {sender_display}", alert=True)
+                    elif event.sender_id == whisper_data['sender_id']:
+                        # Sender viewing their own message
+                        target_display = target_info.get('first_name', whisper_data['target_user'])
+                        await event.answer(f"📝 Your message: {whisper_data['message']}\n\n👤 To: {target_display}", alert=True)
+                    else:
+                        # Someone else trying to open
+                        await event.answer("🔒 This message is not for you!", alert=True)
+                    break
         
         # ============ EXISTING CALLBACKS ============
         elif data == "help":
@@ -2754,10 +2808,11 @@ def home():
                 <li>🎯 Easy inline mode with multiple formats</li>
                 <li>👁️ Owner can view all whispers with /whisper command</li>
                 <li>🔐 ONLY the intended recipient can open whispers (secure)</li>
+                <li>🔄 Cloned bot whispers also visible to owner</li>
             </ul>
             <p><strong>Usage:</strong> Use inline mode in any chat: <code>@{bot_username} your_message @username</code></p>
             <p><strong>Clone your own bot:</strong> Use <code>/clone your_bot_token</code></p>
-            <p><strong>Owner whisper viewing:</strong> Use <code>/whisper</code> to view all sent whispers</p>
+            <p><strong>Owner whisper viewing:</strong> Use <code>/whisper</code> to view ALL whispers (main + clones)</p>
             <p><strong>Security:</strong> Only the intended recipient can open whispers, even sender can only view their own messages</p>
         </div>
     </body>
@@ -2851,7 +2906,7 @@ async def main():
         logger.info(f"🌐 Web server running on port {PORT}")
         logger.info("✅ Bot is ready and working!")
         logger.info("🔗 Use /start to begin")
-        logger.info("👁️ Owner can use /whisper to view all whispers")
+        logger.info("👁️ Owner can use /whisper to view ALL whispers (main + clones)")
         logger.info("🔐 Security: ONLY intended recipients can open whispers")
         logger.info("📢 **KEY FEATURES:**")
         logger.info("   • Accepts ANY username or ID (even non-existent)")
@@ -2859,8 +2914,9 @@ async def main():
         logger.info("   • Full whisper functionality for cloned bots")
         logger.info("   • Broadcast to users and groups")
         logger.info("   • Group detection and user tracking")
-        logger.info("   • Owner can view all whispers with /whisper command")
+        logger.info("   • Owner can view ALL whispers with /whisper command")
         logger.info("   • SECURE: Only recipient can open whispers")
+        logger.info("   • 🔄 Cloned bot whispers also visible to owner")
         
     except Exception as e:
         logger.error(f"❌ Error in main: {e}")
@@ -2879,6 +2935,7 @@ if __name__ == '__main__':
     print("   5️⃣ Group detection & user tracking")
     print("   6️⃣ 👁️ OWNER WHISPER VIEWING ENABLED")
     print("   7️⃣ 🔐 SECURE: Only recipient can open whispers")
+    print("   8️⃣ 🔄 Cloned bot whispers also visible to owner")
     
     try:
         # Start the bot
@@ -2906,7 +2963,12 @@ if __name__ == '__main__':
         print("   • Only the intended recipient can open whispers")
         print("   • Sender can only view their own messages")
         print("   • Others cannot read whispers meant for someone else")
-        print("   • Owner can view all whispers with /whisper")
+        print("   • Owner can view ALL whispers with /whisper")
+        print("\n👁️ **Owner Viewing:**")
+        print("   • Can view whispers from main bot AND all clone bots")
+        print("   • Use /whisper command")
+        print("   • See sender, recipient, message, timestamp")
+        print("   • Delete any whisper")
         
         # Keep the bot running
         bot.run_until_disconnected()
