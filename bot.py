@@ -737,7 +737,7 @@ async def start_handler(event):
 async def help_handler(event):
     try:
         bot_username = (await bot.get_me()).username
-        help_text = HELP_TEXT.format(bot_username=bot_username)
+        help_text = HELP_TEXT.replace("{bot_username}", bot_username)
         
         await event.reply(
             help_text,
@@ -1517,7 +1517,7 @@ async def callback_handler(event):
         # ============ EXISTING CALLBACKS ============
         elif data == "help":
             bot_username = (await bot.get_me()).username
-            help_text = HELP_TEXT.format(bot_username=bot_username)
+            help_text = HELP_TEXT.replace("{bot_username}", bot_username)
             
             await event.edit(
                 help_text,
