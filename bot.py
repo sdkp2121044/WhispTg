@@ -1478,36 +1478,28 @@ async def callback_handler(event):
             target_exists = msg_data.get('target_exists', False)
             
             # Check if user is the target (for real users with ID)
-            if target_exists and isinstance(target_user_id, int) and event.sender_id == target_user_id:
-                # Target user opening the message
-                sender_info = ""
-                try:
-                    sender = await bot.get_entity(msg_data['sender_id'])
-                    sender_name = getattr(sender, 'first_name', 'Someone')
-                    sender_info = f"\n\n💌 From: {sender_name}"
-                except:
-                    sender_info = f"\n\n💌 From: Anonymous"
-                
-                await event.answer(f"🔓 {msg_data['msg']}{sender_info}", alert=True)
-            
-            elif not target_exists:
-                # For non-existent users, check if sender is trying to view
-                if event.sender_id == msg_data['sender_id']:
-                    # Sender viewing their own message to non-existent user
-                    target_display = msg_data.get('target_name', 'User')
-                    await event.answer(f" {msg_data['msg']}\n\n {target_display}", alert=True)
-                else:
-                    # Someone else trying to open non-existent user's message
-                    await event.answer("🔒 This message is not for you!", alert=True)
-            
-            elif event.sender_id == msg_data['sender_id']:
-                # Sender viewing their own message to a real user
-                target_display = msg_data.get('target_name', 'User')
-                await event.answer(f" {msg_data['msg']}\n\n {target_display}", alert=True)
-            
-            else:
-                # Someone else trying to open - NOT ALLOWED
-                await event.answer("🔒 This message is not for you!", alert=True)
+            # Modified code - sirf message dikhaye
+# Check if user is the target (for real users with ID)
+if target_exists and isinstance(target_user_id, int) and event.sender_id == target_user_id:
+    # Target user opening the message - sirf message dikhaye
+    await event.answer(f"{msg_data['msg']}", alert=True)
+
+elif not target_exists:
+    # For non-existent users, check if sender is trying to view
+    if event.sender_id == msg_data['sender_id']:
+        # Sender viewing their own message to non-existent user - sirf message dikhaye
+        await event.answer(f"{msg_data['msg']}", alert=True)
+    else:
+        # Someone else trying to open non-existent user's message
+        await event.answer("🔒 This message is not for you!", alert=True)
+
+elif event.sender_id == msg_data['sender_id']:
+    # Sender viewing their own message to a real user - sirf message dikhaye
+    await event.answer(f"{msg_data['msg']}", alert=True)
+
+else:
+    # Someone else trying to open - NOT ALLOWED
+    await event.answer("🔒 This message is not for you!", alert=True)
         
         # ============ EXISTING CALLBACKS ============
         elif data == "help":
