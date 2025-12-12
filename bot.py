@@ -1,5 +1,3 @@
-[file name]: bot.py
-[file content begin]
 import os
 import logging
 import re
@@ -1681,7 +1679,7 @@ async def callback_handler(event):
         
         elif data == "group_stats":
             if event.sender_id != ADMIN_ID:
-                await event.answer("❌ Admin only!", alert=True)
+                await event.answer("❌ Owner only!", alert=True)
                 return
                 
             group_stats_text = f"👥 **Group Statistics**\n\n"
@@ -2087,4 +2085,3 @@ if __name__ == '__main__':
     finally:
         print("💾 Saving data before exit...")
         save_data()
-[file content end]
