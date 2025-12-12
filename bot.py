@@ -95,7 +95,7 @@ HELP_TEXT = """
 📖 **How to Use Whisper Bot**
 
 **1. Inline Mode:**
-   Type `@{}` in any chat then:
+   Type `@pxxtbot` in any chat then:
 
    **Formats:**
    • `message @username` (with or without space)
@@ -104,20 +104,16 @@ HELP_TEXT = """
    • `123456789 message` (with or without space)
 
 **2. Examples:**
-   • `@{} Hello!@username`
-   • `@{} @username Hello!`
-   • `@{} I miss you 123456789`
-   • `@{} 123456789I miss you`
-   • `@{} Hello @username`
-   • `@{} @username Hello`
+   • `@pxxtbot Hello!@username`
+   • `@pxxtbot @username Hello!`
+   • `@pxxtbot I miss you 123456789`
+   • `@pxxtbot 123456789I miss you`
+   • `@pxxtbot Hello @username`
+   • `@pxxtbot @username Hello`
 
 **3. Commands:**
    • /start - Start bot
    • /help - Show help
-   • /stats - Admin statistics
-   • /broadcast - Broadcast to all users (Admin only)
-   • /gbroadcast - Broadcast to groups (Admin only)
-   • /whisper - View all whispers (Owner only)
 
 🔒 **Only the mentioned user can read your message!**
 """
@@ -1170,11 +1166,10 @@ async def inline_handler(event):
         else:
             display_target = user_info.get('first_name', target_user)
         
-        result_text = f"**🔐 A secret message for {display_target}!**\n\n"
-        result_text += f"*Note: Only {display_target} can open this message.*"
+        result_text = ""
         
         if not user_info.get('exists'):
-            result_text += f"\n\n⚠️ *Note: User @{target_user} may not exist, but whisper can still be created.*"
+            result_text += f"\n\n *A whisper message to @{target_user} can open it.*"
         
         result = event.builder.article(
             title=f"🔒 Secret Message for {display_target}",
@@ -1500,7 +1495,7 @@ async def callback_handler(event):
                 if event.sender_id == msg_data['sender_id']:
                     # Sender viewing their own message to non-existent user
                     target_display = msg_data.get('target_name', 'User')
-                    await event.answer(f"📝 Your message: {msg_data['msg']}\n\n👤 To: {target_display}", alert=True)
+                    await event.answer(f" {msg_data['msg']}\n\n {target_display}", alert=True)
                 else:
                     # Someone else trying to open non-existent user's message
                     await event.answer("🔒 This message is not for you!", alert=True)
@@ -1508,7 +1503,7 @@ async def callback_handler(event):
             elif event.sender_id == msg_data['sender_id']:
                 # Sender viewing their own message to a real user
                 target_display = msg_data.get('target_name', 'User')
-                await event.answer(f"📝 Your message: {msg_data['msg']}\n\n👤 To: {target_display}", alert=True)
+                await event.answer(f" {msg_data['msg']}\n\n {target_display}", alert=True)
             
             else:
                 # Someone else trying to open - NOT ALLOWED
