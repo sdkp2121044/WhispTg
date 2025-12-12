@@ -95,7 +95,7 @@ HELP_TEXT = """
 📖 **How to Use Whisper Bot**
 
 **1. Inline Mode:**
-   Type `@{bot_username}` in any chat then:
+   Type `@{}` in any chat then:
 
    **Formats:**
    • `message @username` (with or without space)
@@ -104,12 +104,12 @@ HELP_TEXT = """
    • `123456789 message` (with or without space)
 
 **2. Examples:**
-   • `@{bot_username} Hello!@username`
-   • `@{bot_username} @username Hello!`
-   • `@{bot_username} I miss you 123456789`
-   • `@{bot_username} 123456789I miss you`
-   • `@{bot_username} Hello @username`
-   • `@{bot_username} @username Hello`
+   • `@{} Hello!@username`
+   • `@{} @username Hello!`
+   • `@{} I miss you 123456789`
+   • `@{} 123456789I miss you`
+   • `@{} Hello @username`
+   • `@{} @username Hello`
 
 **3. Commands:**
    • /start - Start bot
@@ -317,16 +317,8 @@ def get_recent_users_buttons(user_id: int):
             return []
         
         buttons = []
-        # Get last 5 recent users for this sender
-        user_recent = []
-        for user_key, user_data in recent_users.items():
-            if str(user_data.get('sender_id')) == str(user_id):
-                user_recent.append(user_data)
-        
-        # Sort by last_used and take last 5
-        user_recent.sort(key=lambda x: x.get('last_used', ''), reverse=True)
-        
-        for user_data in user_recent[:5]:
+        # Get last 5 recent users
+        for user_key, user_data in list(recent_users.items())[:5]:
             target_user_id = user_data.get('user_id')
             username = user_data.get('username')
             first_name = user_data.get('first_name', 'User')
@@ -341,7 +333,7 @@ def get_recent_users_buttons(user_id: int):
             
             buttons.append([Button.inline(
                 f"👤 {display_text}", 
-                data=f"recent_{target_user_id}"
+                data=f"recent_{user_key}"
             )])
         
         return buttons
@@ -357,7 +349,7 @@ async def validate_and_get_user(target_user: str):
     Returns user info even if user doesn't exist
     """
     try:
-        # Check if it's a user ID (only digits) - accept any digit ID
+        # Check if it's a user ID (only digits)
         if target_user.isdigit():
             user_id = int(target_user)
             
@@ -372,9 +364,9 @@ async def validate_and_get_user(target_user: str):
                         'last_name': getattr(user_obj, 'last_name', ''),
                         'exists': True
                     }
-            except Exception as e:
-                logger.info(f"User {user_id} not found in Telegram: {e}")
+            except Exception:
                 # User not found, but we can still create whisper
+                pass
             
             # Return user info even if not found
             return {
@@ -400,9 +392,9 @@ async def validate_and_get_user(target_user: str):
                     'last_name': getattr(user_obj, 'last_name', ''),
                     'exists': True
                 }
-        except Exception as e:
-            logger.info(f"Username {target_user} not found: {e}")
+        except Exception:
             # User not found, but we can still create whisper
+            pass
         
         # Return user info even if not found
         return {
@@ -487,8 +479,8 @@ def get_group_users_buttons(chat_id: int):
 def add_to_recent_users(sender_id: int, target_user_id: int, target_username=None, target_first_name=None):
     """Add user to recent users list"""
     try:
-        # Store by target_user_id only (not combined with sender_id)
-        recent_users[str(target_user_id)] = {
+        user_key = f"{sender_id}_{target_user_id}"
+        recent_users[user_key] = {
             'user_id': target_user_id,
             'username': target_username,
             'first_name': target_first_name,
@@ -745,7 +737,7 @@ async def start_handler(event):
 async def help_handler(event):
     try:
         bot_username = (await bot.get_me()).username
-        help_text = HELP_TEXT.replace("{bot_username}", bot_username)
+        help_text = HELP_TEXT.format(bot_username, bot_username)
         
         await event.reply(
             help_text,
@@ -991,30 +983,13 @@ async def inline_handler(event):
                 except:
                     pass
         
-        # Get recent users buttons (last 5 users) - ALWAYS SHOW WHEN TYPING
+        # Get recent users buttons (last 5 users)
         recent_buttons = []
         
         if is_group_context and chat_id:
             recent_buttons = get_group_users_buttons(chat_id)
         else:
             recent_buttons = get_recent_users_buttons(event.sender_id)
-        
-        # Show recent users buttons even when user is typing
-        if query_text.strip() and recent_buttons:
-            # User is typing something, show recent users along with query
-            if is_group_context:
-                result_text = f"**Recent Group Members (Last 5):**\nClick any user below to whisper them!\n\n**Your query:** `{query_text}`\n\nOr continue typing your message"
-            else:
-                result_text = f"**Recent Users (Last 5):**\nClick any user below to whisper them!\n\n**Your query:** `{query_text}`\n\nOr continue typing your message"
-            
-            result = event.builder.article(
-                title="🤫 Quick Send to Recent Users",
-                description="Select from recent users or continue typing",
-                text=result_text,
-                buttons=recent_buttons
-            )
-            await event.answer([result])
-            return
         
         if not query_text.strip():
             if recent_buttons:
@@ -1073,53 +1048,42 @@ async def inline_handler(event):
                 target_user = username_match.group(1)
                 message_text = username_match.group(2).strip()
         
-        # Try patterns with user ID - SIMPLIFIED
-        # 5. Any digits at the end (user ID)
+        # Try patterns with user ID
+        # 5. message123456789 (no space)
         if not target_user:
-            id_match = re.search(r'^(.*?)(\d{5,})$', text)  # At least 5 digits
-            if id_match:
+            id_match = re.search(r'^(.*?)(\d+)$', text)
+            if id_match and len(id_match.group(2)) >= 5:  # At least 5 digits
                 message_text = id_match.group(1).strip()
                 target_user = id_match.group(2)
         
-        # 6. Any digits at the beginning (user ID)
+        # 6. 123456789message (no space)
         if not target_user:
-            id_match = re.search(r'^(\d{5,})(.*)$', text)  # At least 5 digits
-            if id_match:
+            id_match = re.search(r'^(\d+)(.*)$', text)
+            if id_match and len(id_match.group(1)) >= 5:  # At least 5 digits
                 target_user = id_match.group(1)
                 message_text = id_match.group(2).strip()
         
-        # 7. Digits with space at end
+        # 7. message 123456789 (with space)
         if not target_user:
-            id_match = re.search(r'^(.*?)\s+(\d{5,})$', text, re.DOTALL)
-            if id_match:
+            id_match = re.search(r'^(.*?)\s+(\d+)$', text, re.DOTALL)
+            if id_match and len(id_match.group(2)) >= 5:  # At least 5 digits
                 message_text = id_match.group(1).strip()
                 target_user = id_match.group(2)
         
-        # 8. Digits with space at beginning
+        # 8. 123456789 message (with space)
         if not target_user:
-            id_match = re.search(r'^(\d{5,})\s+(.*)$', text, re.DOTALL)
-            if id_match:
+            id_match = re.search(r'^(\d+)\s+(.*)$', text, re.DOTALL)
+            if id_match and len(id_match.group(1)) >= 5:  # At least 5 digits
                 target_user = id_match.group(1)
                 message_text = id_match.group(2).strip()
         
         if not target_user:
-            # Show recent users with error message
-            if recent_buttons:
-                result_text = f"❌ **Could not find target user in:** `{text}`\n\n**Recent Users (Last 5):**\nClick any user below or use correct format:\n• `message @username`\n• `message 123456789`"
-                
-                result = event.builder.article(
-                    title="❌ Select from recent users or use correct format",
-                    description="Click recent user or use: message @username",
-                    text=result_text,
-                    buttons=recent_buttons
-                )
-            else:
-                result = event.builder.article(
-                    title="❌ Invalid Format",
-                    description="Use: message @username or @username message",
-                    text="**Valid Formats:**\n• `message@username` (no space)\n• `@usernamemessage` (no space)\n• `message @username` (with space)\n• `@username message` (with space)\n• `message123456789` (no space)\n• `123456789message` (no space)\n• `message 123456789` (with space)\n• `123456789 message` (with space)",
-                    buttons=[[Button.switch_inline("🔄 Try Again", query=text)]]
-                )
+            result = event.builder.article(
+                title="❌ Invalid Format",
+                description="Use: message @username or @username message",
+                text="**Valid Formats:**\n• `message@username` (no space)\n• `@usernamemessage` (no space)\n• `message @username` (with space)\n• `@username message` (with space)\n• `message123456789` (no space)\n• `123456789message` (no space)\n• `message 123456789` (with space)\n• `123456789 message` (with space)",
+                buttons=[[Button.switch_inline("🔄 Try Again", query=text)]]
+            )
             await event.answer([result])
             return
         
@@ -1132,29 +1096,19 @@ async def inline_handler(event):
             await event.answer([result])
             return
         
-        # If message is empty, show instructions with recent users
+        # If message is empty, show instructions
         if not message_text.strip():
             if target_user.isdigit():
                 display_text = f"User ID: {target_user}"
             else:
                 display_text = f"@{target_user}"
             
-            if recent_buttons:
-                result_text = f"**Type your message for {display_text}**\n\n**Recent Users (Last 5):**\nYou can also click any user below:"
-                
-                result = event.builder.article(
-                    title=f"📝 Type message for {display_text}",
-                    description=f"Type your message or select from recent users",
-                    text=result_text,
-                    buttons=recent_buttons
-                )
-            else:
-                result = event.builder.article(
-                    title=f"📝 Type message for {display_text}",
-                    description=f"Type your message then send",
-                    text=f"**Type your whisper message for {display_text}**\n\nNow type your message and the bot will create a secret whisper.",
-                    buttons=[[Button.switch_inline(f"✍️ Type message for {display_text}", query=f"{text} ")]]
-                )
+            result = event.builder.article(
+                title=f"📝 Type message for {display_text}",
+                description=f"Type your message then send",
+                text=f"**Type your whisper message for {display_text}**\n\nNow type your message and the bot will create a secret whisper.",
+                buttons=[[Button.switch_inline(f"✍️ Type message for {display_text}", query=f"{text} ")]]
+            )
             await event.answer([result])
             return
         
@@ -1162,25 +1116,15 @@ async def inline_handler(event):
         user_info = await validate_and_get_user(target_user)
         
         if not user_info:
-            if recent_buttons:
-                result_text = f"❌ **Could not process user:** `{target_user}`\n\n**Recent Users (Last 5):**\nClick any user below:"
-                
-                result = event.builder.article(
-                    title="❌ Error processing user",
-                    description="Select from recent users below",
-                    text=result_text,
-                    buttons=recent_buttons
-                )
-            else:
-                result = event.builder.article(
-                    title="❌ Error",
-                    description="Could not process user",
-                    text="❌ Could not process the user. Please try again."
-                )
+            result = event.builder.article(
+                title="❌ Error",
+                description="Could not process user",
+                text="❌ Could not process the user. Please try again."
+            )
             await event.answer([result])
             return
         
-        # Add to appropriate recent list if user exists and has ID
+        # Add to appropriate recent list if user exists
         if user_info.get('exists') and user_info.get('id'):
             if is_group_context and chat_id:
                 add_user_to_group_history(
@@ -1189,22 +1133,13 @@ async def inline_handler(event):
                     user_info.get('username'),
                     user_info.get('first_name')
                 )
-            
-            # Always add to recent users for private chats too
-            add_to_recent_users(
-                event.sender_id,
-                user_info['id'],
-                user_info.get('username'),
-                user_info.get('first_name')
-            )
-        elif user_info.get('id'):  # Even non-existent users with IDs
-            # Add non-existent users with IDs to recent list
-            add_to_recent_users(
-                event.sender_id,
-                user_info['id'],
-                user_info.get('username'),
-                user_info.get('first_name')
-            )
+            else:
+                add_to_recent_users(
+                    event.sender_id,
+                    user_info['id'],
+                    user_info.get('username'),
+                    user_info.get('first_name')
+                )
         
         # Create message ID
         message_id = f'msg_{event.sender_id}_{target_user}_{int(datetime.now().timestamp())}'
@@ -1241,17 +1176,11 @@ async def inline_handler(event):
         if not user_info.get('exists'):
             result_text += f"\n\n⚠️ *Note: User @{target_user} may not exist, but whisper can still be created.*"
         
-        # Show recent users in the result too
-        if recent_buttons:
-            result_text += f"\n\n**Quick send to recent users:**"
-        
         result = event.builder.article(
             title=f"🔒 Secret Message for {display_target}",
             description=f"Click to send secret message to {display_target}",
             text=result_text,
-            buttons=[
-                [Button.inline("🔓 Show Message", data=message_id)]
-            ] + recent_buttons
+            buttons=[[Button.inline("🔓 Show Message", data=message_id)]]
         )
         
         await event.answer([result])
@@ -1585,10 +1514,10 @@ async def callback_handler(event):
                 # Someone else trying to open - NOT ALLOWED
                 await event.answer("🔒 This message is not for you!", alert=True)
         
-        # ============ HELP BUTTON FIX ============
+        # ============ EXISTING CALLBACKS ============
         elif data == "help":
             bot_username = (await bot.get_me()).username
-            help_text = HELP_TEXT.replace("{bot_username}", bot_username)
+            help_text = HELP_TEXT.format(bot_username, bot_username)
             
             await event.edit(
                 help_text,
@@ -1598,43 +1527,6 @@ async def callback_handler(event):
                 ]
             )
         
-        # ============ RECENT USER CALLBACK ============
-        elif data.startswith("recent_"):
-            try:
-                target_user_id = data.replace("recent_", "")
-                
-                # Find user in recent_users
-                user_data = None
-                for user_key, user_info in recent_users.items():
-                    if str(user_info.get('user_id')) == str(target_user_id):
-                        user_data = user_info
-                        break
-                
-                if user_data:
-                    username = user_data.get('username')
-                    first_name = user_data.get('first_name', 'User')
-                    
-                    if username:
-                        target_text = f"@{username}"
-                    else:
-                        target_text = f"{first_name}"
-                    
-                    await event.edit(
-                        f"🔒 **Send whisper to {target_text}**\n\n"
-                        f"Now switch to inline mode by clicking the button below,\n"
-                        f"then type your message and send.",
-                        buttons=[[Button.switch_inline(
-                            f"💌 Message {target_text}", 
-                            query=f"{target_text}"
-                        )]]
-                    )
-                else:
-                    await event.answer("User not found in recent list!", alert=True)
-            except Exception as e:
-                logger.error(f"Recent user callback error: {e}")
-                await event.answer("❌ Error processing recent user!", alert=True)
-        
-        # ============ EXISTING CALLBACKS ============
         elif data == "admin_stats":
             if event.sender_id != ADMIN_ID:
                 await event.answer("❌ Admin only!", alert=True)
@@ -1831,6 +1723,30 @@ async def callback_handler(event):
                 )]]
             )
         
+        elif data.startswith("recent_"):
+            user_key = data.replace("recent_", "")
+            if user_key in recent_users:
+                user_data = recent_users[user_key]
+                username = user_data.get('username')
+                first_name = user_data.get('first_name', 'User')
+                
+                if username:
+                    target_text = f"@{username}"
+                else:
+                    target_text = f"{first_name}"
+                
+                await event.edit(
+                    f"🔒 **Send whisper to {target_text}**\n\n"
+                    f"Now switch to inline mode by clicking the button below,\n"
+                    f"then type your message and send.",
+                    buttons=[[Button.switch_inline(
+                        f"💌 Message {target_text}", 
+                        query=f"{target_text}"
+                    )]]
+                )
+            else:
+                await event.answer("User not found in recent list!", alert=True)
+        
         elif data == "back_start":
             if event.sender_id == ADMIN_ID:
                 await event.edit(
@@ -1898,9 +1814,7 @@ async def chat_action_handler(event):
                     f"• `@{me.username} Hello@username` (no space)\n"
                     f"• `@{me.username} @usernameHello` (no space)\n"
                     f"• `@{me.username} Hello @username` (with space)\n"
-                    f"• `@{me.username} @username Hello` (with space)\n"
-                    f"• `@{me.username} Hello 2081140331` (user ID)\n"
-                    f"• `@{me.username} 2081140331Hello` (user ID, no space)\n\n"
+                    f"• `@{me.username} @username Hello` (with space)\n\n"
                     f"🎯 **Try it now using the button below!**"
                 )
                 
@@ -1994,8 +1908,8 @@ def home():
                 <li><code>@{bot_username} @usernameHello</code> (no space)</li>
                 <li><code>@{bot_username} Hello @username</code> (with space)</li>
                 <li><code>@{bot_username} @username Hello</code> (with space)</li>
-                <li><code>@{bot_username} Hello 2081140331</code> (user ID with space)</li>
-                <li><code>@{bot_username} 2081140331Hello</code> (user ID, no space)</li>
+                <li><code>@{bot_username} Hello 123456789</code> (with space)</li>
+                <li><code>@{bot_username} 123456789Hello</code> (no space)</li>
             </ul>
             <p><strong>Broadcast Commands:</strong></p>
             <ul>
@@ -2069,8 +1983,7 @@ async def main():
         logger.info("📢 **KEY FEATURES:**")
         logger.info("   • Flexible whisper formats (with or without spaces)")
         logger.info("   • Accepts ANY username or ID (even non-existent)")
-        logger.info("   • Last 5 users shown instantly when typing")
-        logger.info("   • User IDs like 2081140331 work perfectly")
+        logger.info("   • Last 5 users shown instantly for quick sending")
         logger.info("   • Broadcast to users and groups")
         logger.info("   • Group detection and user tracking")
         logger.info("   • Owner can view ALL whispers with /whisper command")
@@ -2089,13 +2002,12 @@ if __name__ == '__main__':
     print("\n🔥 **KEY FEATURES ACTIVATED:**")
     print("   1️⃣ Flexible whisper formats (with or without spaces)")
     print("   2️⃣ Accepts ANY username/ID (even invalid)")
-    print("   3️⃣ User IDs like 2081140331 work perfectly")
-    print("   4️⃣ Last 5 users shown instantly when typing")
-    print("   5️⃣ Broadcast to users & groups")
-    print("   6️⃣ Group detection & user tracking")
-    print("   7️⃣ 👁️ OWNER WHISPER VIEWING ENABLED")
-    print("   8️⃣ 🔔 Owner gets instant notifications")
-    print("   9️⃣ 🔐 SECURE: Only recipient can open whispers")
+    print("   3️⃣ Last 5 users shown instantly")
+    print("   4️⃣ Broadcast to users & groups")
+    print("   5️⃣ Group detection & user tracking")
+    print("   6️⃣ 👁️ OWNER WHISPER VIEWING ENABLED")
+    print("   7️⃣ 🔔 Owner gets instant notifications")
+    print("   8️⃣ 🔐 SECURE: Only recipient can open whispers")
     
     try:
         # Start the bot
@@ -2106,7 +2018,7 @@ if __name__ == '__main__':
         print("🔄 Bot is now running...")
         print("\n📋 **Available Commands:**")
         print("   • /start - Start bot")
-        print("   • /help - Show help (FIXED)")
+        print("   • /help - Show help")
         print("   • /broadcast - Broadcast to users (Admin)")
         print("   • /gbroadcast - Broadcast to groups (Admin)")
         print("   • /stats - Admin statistics")
@@ -2116,8 +2028,8 @@ if __name__ == '__main__':
         print("   • @bot_username @usernameHello (no space)")
         print("   • @bot_username Hello @username (with space)")
         print("   • @bot_username @username Hello (with space)")
-        print("   • @bot_username Hello 2081140331 (user ID with space)")
-        print("   • @bot_username 2081140331Hello (user ID, no space)")
+        print("   • @bot_username I miss you 123456789")
+        print("   • @bot_username 123456789I miss you (no space)")
         print("\n🔒 **Security Rules:**")
         print("   • Only the intended recipient can open whispers")
         print("   • Sender can only view their own messages")
@@ -2129,10 +2041,6 @@ if __name__ == '__main__':
         print("   • See sender, recipient, message, timestamp")
         print("   • Delete any whisper")
         print("   • Instant notifications for new whispers")
-        print("\n📝 **Recent Users Feature:**")
-        print("   • Last 5 users shown instantly in inline mode")
-        print("   • Quick click to send to recent users")
-        print("   • Works while typing messages")
         
         # Keep the bot running
         bot.run_until_disconnected()
