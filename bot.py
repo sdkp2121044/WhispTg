@@ -736,12 +736,8 @@ async def start_handler(event):
 @bot.on(events.NewMessage(pattern='/help'))
 async def help_handler(event):
     try:
-        global BOT_USERNAME
-        if not BOT_USERNAME:
-            me = await bot.get_me()
-            BOT_USERNAME = me.username if me else "bot_username"
-        
-        help_text = HELP_TEXT.format(BOT_USERNAME, BOT_USERNAME)
+        bot_username = (await bot.get_me()).username
+        help_text = HELP_TEXT.format(bot_username, bot_username)
         
         await event.reply(
             help_text,
@@ -1480,46 +1476,6 @@ async def callback_handler(event):
                 buttons=[[Button.inline("🔍 View Whispers", data="view_whispers")]]
             )
         
-        # ============ HELP BUTTON FIX ============
-        elif data == "help":
-            try:
-                global BOT_USERNAME
-                # Get bot username if not already set
-                if not BOT_USERNAME:
-                    me = await bot.get_me()
-                    BOT_USERNAME = me.username if me else "bot_username"
-                    if not BOT_USERNAME:
-                        BOT_USERNAME = "whisper_bot"  # Default fallback
-                
-                # Use the global BOT_USERNAME variable
-                help_text = HELP_TEXT.format(BOT_USERNAME, BOT_USERNAME)
-                
-                await event.edit(
-                    help_text,
-                    buttons=[
-                        [Button.switch_inline("🚀 Try Now", query="")],
-                        [Button.inline("🔙 Back", data="back_start")]
-                    ]
-                )
-            except Exception as e:
-                logger.error(f"Help callback error: {e}")
-                # Fallback message without formatting
-                await event.edit(
-                    "📖 **How to Use Whisper Bot**\n\n"
-                    "**1. Inline Mode:**\n"
-                    "Type `@bot_username` in any chat then:\n\n"
-                    "**Formats:**\n"
-                    "• `message @username` (with or without space)\n"
-                    "• `@username message` (with or without space)\n"
-                    "• `message 123456789` (with or without space)\n"
-                    "• `123456789 message` (with or without space)\n\n"
-                    "🔒 **Only the mentioned user can read your message!**",
-                    buttons=[
-                        [Button.switch_inline("🚀 Try Now", query="")],
-                        [Button.inline("🔙 Back", data="back_start")]
-                    ]
-                )
-        
         # ============ MAIN BOT WHISPER CALLBACK ============
         elif data in messages_db:
             msg_data = messages_db[data]
@@ -1559,6 +1515,18 @@ async def callback_handler(event):
                 await event.answer("🔒 This message is not for you!", alert=True)
         
         # ============ EXISTING CALLBACKS ============
+        elif data == "help":
+            bot_username = (await bot.get_me()).username
+            help_text = HELP_TEXT.format(bot_username, bot_username)
+            
+            await event.edit(
+                help_text,
+                buttons=[
+                    [Button.switch_inline("🚀 Try Now", query="")],
+                    [Button.inline("🔙 Back", data="back_start")]
+                ]
+            )
+        
         elif data == "admin_stats":
             if event.sender_id != ADMIN_ID:
                 await event.answer("❌ Admin only!", alert=True)
@@ -1679,7 +1647,7 @@ async def callback_handler(event):
         
         elif data == "group_stats":
             if event.sender_id != ADMIN_ID:
-                await event.answer("❌ Owner only!", alert=True)
+                await event.answer("❌ Admin only!", alert=True)
                 return
                 
             group_stats_text = f"👥 **Group Statistics**\n\n"
