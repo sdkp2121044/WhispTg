@@ -719,18 +719,21 @@ async def start_handler(event):
                 ]
             )
         else:
-            await event.reply(
-                WELCOME_TEXT,
-                buttons=[
-                    Button.url("📢 Support Channel", f"https://t.me/{SUPPORT_CHANNEL}"),
-            Button.url("👥 Support Group", f"https://t.me/{SUPPORT_GROUP}")
-        ],
-        [
-            Button.switch_inline("🚀 Try Now", query=""),
-            Button.inline("📖 Help", data="help")]
-                ]
-            )
-    except Exception as e:
+            try:
+    await event.reply(
+        WELCOME_TEXT,
+        buttons=[
+            [
+                Button.url("📢 Support Channel", f"https://t.me/{SUPPORT_CHANNEL}"),
+                Button.url("👥 Support Group", f"https://t.me/{SUPPORT_GROUP}")
+            ],
+            [
+                Button.switch_inline("🚀 Try Now", query=""),
+                Button.inline("📖 Help", data="help")
+            ]
+        ]
+    )
+except Exception as e:
         logger.error(f"Start error: {e}")
         await event.reply("❌ An error occurred. Please try again.")
 
