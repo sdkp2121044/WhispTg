@@ -45,8 +45,8 @@ except Exception as e:
     raise
 
 # ============ SUPPORT CHANNELS ============
-SUPPORT_CHANNEL = "shribots"
-SUPPORT_GROUP = "idxhelp"
+SUPPORT_CHANNEL = "https://t.me/+Ns2R-5tx8ng2M2Zl"
+SUPPORT_GROUP = "https://t.me/+Ns2R-5tx8ng2M2Zl"
 
 # ============ STORAGE ============
 messages_db = {}
@@ -76,10 +76,8 @@ OWNER_NOTIFICATION_CHAT_ID = ADMIN_ID  # Owner will get notifications here
 
 # ============ TEXT MESSAGES ============
 WELCOME_TEXT = """
-╔══════════════════════╗
-║     🎭 𝗦𝗛𝗥𝗜𝗕𝗢𝗧𝗦     ║ 𝐏𝐨𝐰𝐞𝐫𝐞𝐝 𝐛𝐲
-║    𝗪𝗛𝗜𝗦𝗣𝗘𝗥 𝗕𝗢𝗧    ║      𝐀𝐫𝐭𝐢𝐬𝐭
-╚══════════════════════╝
+⏤͟͟͞ 𝘼𝐫𝐭𝐢𝐬𝐭
+ᏇᏂᎥᏕᎮᏋᏒ ᏰᎧᏖ 
 
 🤫 Welcome to Secret Whisper Bot!
 
