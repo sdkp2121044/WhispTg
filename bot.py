@@ -710,26 +710,21 @@ async def start_handler(event):
             await event.reply(
                 WELCOME_TEXT,
                 buttons=[
-                    [Button.url("📢 Support Channel", f"https://t.me/{SUPPORT_CHANNEL}")],
-                    [Button.url("👥 Support Group", f"https://t.me/{SUPPORT_GROUP}")],
+                    [Button.url("📢 Support Channel", f"https://t.me/{SUPPORT_CHANNEL}"), Button.url("👥 Support Group", f"https://t.me/{SUPPORT_GROUP}")],
                     [Button.switch_inline("🚀 Try Now", query="")],
                     [Button.inline("📊 Statistics", data="admin_stats"), Button.inline("📖 Help", data="help")],
-                    [Button.inline("📢 Broadcast", data="broadcast_menu")],
-                    [Button.inline("🔍 View Whispers", data="view_whispers")]
+                    [Button.inline("📢 Broadcast", data="broadcast_menu"), Button.inline("🔍 View Whispers", data="view_whispers")]
                 ]
             )
         else:
-    await event.reply(
+            await event.reply(
                 WELCOME_TEXT,
                 buttons=[
-                Button.url("📢 Support Channel", f"https://t.me/{SUPPORT_CHANNEL}"),
-                Button.url("👥 Support Group", f"https://t.me/{SUPPORT_GROUP}")
-            ],
-            [
-                Button.switch_inline("🚀 Try Now", query=""),
-                Button.inline("📖 Help", data="help")]
-        ]
-    )
+                    [Button.url("📢 Support Channel", f"https://t.me/{SUPPORT_CHANNEL}"), Button.url("👥 Support Group", f"https://t.me/{SUPPORT_GROUP}")],
+                    [Button.switch_inline("🚀 Try Now", query="")],
+                    [Button.inline("📖 Help", data="help")]
+                ]
+            )
     except Exception as e:
         logger.error(f"Start error: {e}")
         await event.reply("❌ An error occurred. Please try again.")
