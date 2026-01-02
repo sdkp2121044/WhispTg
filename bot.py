@@ -76,11 +76,7 @@ OWNER_NOTIFICATION_CHAT_ID = ADMIN_ID  # Owner will get notifications here
 
 # ============ TEXT MESSAGES ============
 WELCOME_TEXT = """
-    ___         __  _      __ 
-   /   |  _____/ /_(_)____/ /_
-  / /| | / ___/ __/ / ___/ __/
- / ___ |/ /  / /_/ (__  ) /_  
-/_/  |_/_/   \__/_/____/\__/  
+<b><i>𝘼𝙧𝙩𝙞𝙨𝙩</i></b>
                               
 ᏇᏂᎥᏕᎮᏋᏒ ᏰᎧᏖ 
 
