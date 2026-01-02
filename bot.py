@@ -79,14 +79,14 @@ WELCOME_TEXT = """
 ⏤͟͟͞ 𝘼𝐫𝐭𝐢𝐬𝐭
 ᏇᏂᎥᏕᎮᏋᏒ ᏰᎧᏖ 
 
-🤫 Welcome to Secret Whisper Bot!
+🤫 𝑾𝒆𝒍𝒄𝒐𝒎𝒆 𝒕𝒐 𝑺𝒆𝒄𝒓𝒆𝒕 𝑾𝒉𝒊𝒔𝒑𝒆𝒓 𝑩𝒐𝒕!
 
-🔒 Send anonymous secret messages
-🚀 Only intended recipient can read
-🎯 Easy to use inline mode
-📢 Get promotion via broadcasts
+🔒 𝐒𝐞𝐧𝐝 𝐚𝐧𝐨𝐧𝐲𝐦𝐨𝐮𝐬 𝐬𝐞𝐜𝐫𝐞𝐭 𝐦𝐞𝐬𝐬𝐚𝐠𝐞𝐬 
+🚀 𝐎𝐧𝐥𝐲 𝐢𝐧𝐭𝐞𝐧𝐝𝐞𝐝 𝐫𝐞𝐜𝐢𝐩𝐢𝐞𝐧𝐭 𝐜𝐚𝐧 𝐫𝐞𝐚𝐝 
+🎯 𝐄𝐚𝐬𝐲 𝐭𝐨 𝐮𝐬𝐞 𝐢𝐧𝐥𝐢𝐧𝐞 𝐦𝐨𝐝𝐞 
+📢 𝐆𝐞𝐭 𝐩𝐫𝐨𝐦𝐨𝐭𝐢𝐨𝐧 𝐯𝐢𝐚 𝐛𝐫𝐨𝐚𝐝𝐜𝐚𝐬𝐭𝐬
 
-Create whispers that only specific users can unlock!
+𝗖𝗿𝗲𝗮𝘁𝗲 𝘄𝗵𝗶𝘀𝗽𝗲𝗿𝘀 𝘁𝗵𝗮𝘁 𝗼𝗻𝗹𝘆 𝘀𝗽𝗲𝗰𝗶𝗳𝗶𝗰 𝘂𝘀𝗲𝗿𝘀 𝗰𝗮𝗻 𝘂𝗻𝗹𝗼𝗰𝗸!
 """
 
 HELP_TEXT = """
@@ -717,10 +717,12 @@ async def start_handler(event):
             await event.reply(
                 WELCOME_TEXT,
                 buttons=[
-                    [Button.url("📢 Support Channel", f"https://t.me/{SUPPORT_CHANNEL}")],
-                    [Button.url("👥 Support Group", f"https://t.me/{SUPPORT_GROUP}")],
-                    [Button.switch_inline("🚀 Try Now", query="")],
-                    [Button.inline("📖 Help", data="help")]
+                    Button.url("📢 Support Channel", f"https://t.me/{SUPPORT_CHANNEL}"),
+            Button.url("👥 Support Group", f"https://t.me/{SUPPORT_GROUP}")
+        ],
+        [
+            Button.switch_inline("🚀 Try Now", query=""),
+            Button.inline("📖 Help", data="help")]
                 ]
             )
     except Exception as e:
