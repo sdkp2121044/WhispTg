@@ -719,11 +719,9 @@ async def start_handler(event):
                 ]
             )
         else:
-            try:
     await event.reply(
-        WELCOME_TEXT,
-        buttons=[
-            [
+                WELCOME_TEXT,
+                buttons=[
                 Button.url("📢 Support Channel", f"https://t.me/{SUPPORT_CHANNEL}"),
                 Button.url("👥 Support Group", f"https://t.me/{SUPPORT_GROUP}")
             ],
