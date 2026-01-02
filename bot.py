@@ -727,11 +727,10 @@ async def start_handler(event):
             ],
             [
                 Button.switch_inline("🚀 Try Now", query=""),
-                Button.inline("📖 Help", data="help")
-            ]
-        ]
-    )
-except Exception as e:
+                Button.inline("📖 Help", data="help")]
+                ]
+            )
+    except Exception as e:
         logger.error(f"Start error: {e}")
         await event.reply("❌ An error occurred. Please try again.")
 
