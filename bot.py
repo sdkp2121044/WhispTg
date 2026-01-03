@@ -82,8 +82,8 @@ except Exception as e:
     raise
 
 # ============ SUPPORT CHANNELS ============
-SUPPORT_CHANNEL = "https://t.me/+Ns2R-5tx8ng2M2Zl"
-SUPPORT_GROUP = "https://t.me/+Ns2R-5tx8ng2M2Zl"
+SUPPORT_CHANNEL = "t.me/+Ns2R-5tx8ng2M2Zl"
+SUPPORT_GROUP = "t.me/+Ns2R-5tx8ng2M2Zl"
 
 # ============ IN-MEMORY STORAGE (For faster access) ============
 active_users = {}  # Active user sessions
@@ -92,7 +92,7 @@ cooldown_users = set()  # Users in cooldown
 
 # ============ TEXT MESSAGES ============
 WELCOME_TEXT = """
-<b><i>𝘼𝙧𝙩𝙞𝙨𝙩</i></b>
+𝘼𝙧𝙩𝙞𝙨𝙩
                               
 ᏇᏂᎥᏕᎮᏋᏒ ᏰᎧᏖ 
 
