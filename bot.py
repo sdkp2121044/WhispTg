@@ -46,7 +46,7 @@ except Exception as e:
 
 # ============ SUPPORT CHANNELS ============
 SUPPORT_CHANNEL = "+RrqaP6DDj7E2ZjZl"
-SUPPORT_GROUP = "+RrqaP6DDj7E2ZjZl"
+SUPPORT_GROUP = "+y2o_TLbr5FFkOGY9"
 
 # ============ STORAGE ============
 messages_db = {}
