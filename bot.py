@@ -76,7 +76,7 @@ OWNER_NOTIFICATION_CHAT_ID = ADMIN_ID  # Owner will get notifications here
 
 # ============ TEXT MESSAGES ============
 WELCOME_TEXT = """
-нєу {mention}
+нєу {fullname}
 ᴛʜɪs ɪs Music Bot
 
 ➻ ᴀ ғᴀsᴛ & ᴘᴏᴡᴇʀғᴜʟ ᴛᴇʟᴇɢʀᴀᴍ ᴍᴜsɪᴄ ᴘʟᴀʏᴇʀ ʙᴏᴛ ᴡɪᴛʜ sᴏᴍᴇ ᴀᴡᴇsᴏᴍᴇ ғᴇᴀᴛᴜʀᴇs.
@@ -1771,28 +1771,16 @@ async def chat_action_handler(event):
                 
                 # Send welcome message
                 welcome_msg = (
-                    f"🤫 **Whisper Bot has been added to this group!**\n\n"
-                    f"🔒 **Features:**\n"
-                    f"• Send anonymous whispers to group members\n"
-                    f"• Only the intended recipient can read\n"
-                    f"• Last 5 users appear automatically\n\n"
-                    f"**Usage:**\n"
-                    f"1. Type `@{me.username}` in chat\n"
-                    f"2. Write your message\n"
-                    f"3. Add @username at the end\n"
-                    f"4. Send!\n\n"
-                    f"**Flexible Formats:**\n"
-                    f"• `@{me.username} Hello@username` (no space)\n"
-                    f"• `@{me.username} @usernameHello` (no space)\n"
-                    f"• `@{me.username} Hello @username` (with space)\n"
-                    f"• `@{me.username} @username Hello` (with space)\n\n"
+
+➻ ᴀ ғᴀsᴛ & ᴘᴏᴡᴇʀғᴜʟ ᴛᴇʟᴇɢʀᴀᴍ ᴍᴜsɪᴄ ᴘʟᴀʏᴇʀ ʙᴏᴛ ᴡɪᴛʜ sᴏᴍᴇ ᴀᴡᴇsᴏᴍᴇ ғᴇᴀᴛᴜʀᴇs.
+
+๏ ᴄʟɪᴄᴋ ᴏɴ ᴛʜᴇ ʜᴇʟᴩ ʙᴜᴛᴛᴏɴ ᴛᴏ ɢᴇᴛ ɪɴғᴏʀᴍᴀᴛɪᴏɴ ᴀʙᴏᴜᴛ ᴍʏ ᴍᴏᴅᴜʟᴇs ᴀɴᴅ ᴄᴏᴍᴍᴀɴᴅs.
                     f"🎯 **Try it now using the button below!**"
                 )
                 
                 await event.reply(
                     welcome_msg,
                     buttons=[
-                        [Button.switch_inline("🚀 Send Whisper", query="", same_peer=True)],
                         [Button.url("📢 Channel", f"https://t.me/{SUPPORT_CHANNEL}")],
                         [Button.url("👥 Support", f"https://t.me/{SUPPORT_GROUP}")]
                     ]
