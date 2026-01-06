@@ -1771,16 +1771,9 @@ async def chat_action_handler(event):
                 
                 # Send welcome message
                 welcome_msg = (
-                    f"🎯 **Try it now using the button below!**"
+                    f"🎯 **Hello everyone!**"
                 )
                 
-                await event.reply(
-                    welcome_msg,
-                    buttons=[
-                        [Button.url("📢 Channel", f"https://t.me/{SUPPORT_CHANNEL}")],
-                        [Button.url("👥 Support", f"https://t.me/{SUPPORT_GROUP}")]
-                    ]
-                )
     except Exception as e:
         logger.error(f"Chat action error: {e}")
 
