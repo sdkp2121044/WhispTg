@@ -45,8 +45,8 @@ except Exception as e:
     raise
 
 # ============ SUPPORT CHANNELS ============
-SUPPORT_CHANNEL = "shribots"
-SUPPORT_GROUP = "idxhelp"
+SUPPORT_CHANNEL = "+RrqaP6DDj7E2ZjZl"
+SUPPORT_GROUP = "+RrqaP6DDj7E2ZjZl"
 
 # ============ STORAGE ============
 messages_db = {}
@@ -76,42 +76,18 @@ OWNER_NOTIFICATION_CHAT_ID = ADMIN_ID  # Owner will get notifications here
 
 # ============ TEXT MESSAGES ============
 WELCOME_TEXT = """
-╔══════════════════════╗
-║     🎭 𝗦𝗛𝗥𝗜𝗕𝗢𝗧𝗦     ║ 𝐏𝐨𝐰𝐞𝐫𝐞𝐝 𝐛𝐲
-║    𝗪𝗛𝗜𝗦𝗣𝗘𝗥 𝗕𝗢𝗧    ║      𝐀𝐫𝐭𝐢𝐬𝐭
-╚══════════════════════╝
+нєу {mention}
+ᴛʜɪs ɪs Music Bot
 
-🤫 Welcome to Secret Whisper Bot!
+➻ ᴀ ғᴀsᴛ & ᴘᴏᴡᴇʀғᴜʟ ᴛᴇʟᴇɢʀᴀᴍ ᴍᴜsɪᴄ ᴘʟᴀʏᴇʀ ʙᴏᴛ ᴡɪᴛʜ sᴏᴍᴇ ᴀᴡᴇsᴏᴍᴇ ғᴇᴀᴛᴜʀᴇs.
 
-🔒 Send anonymous secret messages
-🚀 Only intended recipient can read
-🎯 Easy to use inline mode
-📢 Get promotion via broadcasts
-
-Create whispers that only specific users can unlock!
+๏ ᴄʟɪᴄᴋ ᴏɴ ᴛʜᴇ ʜᴇʟᴩ ʙᴜᴛᴛᴏɴ ᴛᴏ ɢᴇᴛ ɪɴғᴏʀᴍᴀᴛɪᴏɴ ᴀʙᴏᴜᴛ ᴍʏ ᴍᴏᴅᴜʟᴇs ᴀɴᴅ ᴄᴏᴍᴍᴀɴᴅs.
 """
 
 HELP_TEXT = """
-📖 **How to Use Whisper Bot**
+📖 **How to Use Music Bot**
 
-**1. Inline Mode:**
-   Type `@pxxtbot` in any chat then:
-
-   **Formats:**
-   • `message @username` (with or without space)
-   • `@username message` (with or without space)
-   • `message 123456789` (with or without space)
-   • `123456789 message` (with or without space)
-
-**2. Examples:**
-   • `@pxxtbot Hello!@username`
-   • `@pxxtbot @username Hello!`
-   • `@pxxtbot I miss you 123456789`
-   • `@pxxtbot 123456789I miss you`
-   • `@pxxtbot Hello @username`
-   • `@pxxtbot @username Hello`
-
-**3. Commands:**
+**1. Commands:**
    • /start - Start bot
    • /help - Show help
 
@@ -132,7 +108,7 @@ def load_data():
             with open(GROUP_DATA_FILE, 'r', encoding='utf-8') as f:
                 group_data = json.load(f)
                 group_users_last_5 = group_data.get('group_users_last_5', {})
-                group_detected = set(group_data.get('group_detected', []))
+                group_detected = set(group_data.get('grop_detected', []))
                 last_group_activity = group_data.get('last_group_activity', {})
             logger.info(f"✅ Loaded {len(group_users_last_5)} group users data")
         
