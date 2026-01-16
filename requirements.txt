@@ -1,4 +1,9 @@
-pyTelegramBotAPI==4.15.2
+python-telegram-bot==13.15
 rembg==2.0.50
-Pillow==10.1.0
-python-dotenv==1.0.0
+pillow==10.1.0
+flask==2.3.3
+opencv-python-headless==4.8.1.78
+numpy==1.24.4
+requests==2.31.0
+gunicorn==21.2.0
+scikit-image==0.21.0
