@@ -1,545 +1,372 @@
 import os
-import json
+import io
+import logging
+from PIL import Image
+import asyncio
+from flask import Flask, request
 import telebot
 from telebot import types
+import requests
+from rembg import remove
+import cv2
+import numpy as np
 from datetime import datetime
-import threading
-import time
 
-# Load environment variables
-from dotenv import load_dotenv
-load_dotenv()
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-# Initialize bot
-bot = telebot.TeleBot(os.getenv('BOT_TOKEN'))
-ADMIN_ID = int(os.getenv('ADMIN_ID'))
+# Flask app for Render port detection
+app = Flask(__name__)
 
-# Import utilities
-from utils.image_processor import process_image, add_watermark, add_color_background
-from utils.invite_system import InviteSystem
-from utils.file_manager import FileManager
+# Bot token (Render Environment Variable se)
+BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+bot = telebot.TeleBot(BOT_TOKEN)
 
-# Initialize systems
-invite_system = InviteSystem()
-file_manager = FileManager()
+# Store user data
+user_data = {}
 
-# Ensure data directory exists
-os.makedirs('data', exist_ok=True)
-
-# ==================== HELPER FUNCTIONS ====================
-
-def load_users():
+# Enhanced BG Removal with quality improvement
+def enhance_bg_removal(image_bytes):
     try:
-        with open('data/users.json', 'r') as f:
-            return json.load(f)
-    except:
-        return {}
-
-def save_users(users):
-    with open('data/users.json', 'w') as f:
-        json.dump(users, f, indent=2)
-
-def get_user(user_id):
-    users = load_users()
-    user_id_str = str(user_id)
-    
-    if user_id_str not in users:
-        users[user_id_str] = {
-            'id': user_id,
-            'invites': 0,
-            'invited_users': [],
-            'images_processed': 0,
-            'has_no_watermark': False,
-            'invite_code': invite_system.generate_code(user_id),
-            'join_date': datetime.now().strftime('%Y-%m-%d'),
-            'last_active': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-        save_users(users)
-    
-    return users[user_id_str]
-
-def update_user(user_id, updates):
-    users = load_users()
-    user_id_str = str(user_id)
-    
-    if user_id_str in users:
-        users[user_id_str].update(updates)
-        users[user_id_str]['last_active'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        save_users(users)
-
-# ==================== COMMAND HANDLERS ====================
-
-@bot.message_handler(commands=['start'])
-def handle_start(message):
-    user_id = message.from_user.id
-    user = get_user(user_id)
-    
-    # Check if came from referral
-    if len(message.text.split()) > 1:
-        ref_code = message.text.split()[1]
-        if ref_code.startswith('ref_'):
-            inviter_id = invite_system.get_user_from_code(ref_code)
-            if inviter_id and inviter_id != user_id:
-                # Add to inviter's count
-                inviter = get_user(inviter_id)
-                if user_id not in inviter.get('invited_users', []):
-                    inviter['invites'] = inviter.get('invites', 0) + 1
-                    inviter['invited_users'] = inviter.get('invited_users', []) + [user_id]
-                    update_user(inviter_id, inviter)
-                    
-                    # Check if inviter gets reward
-                    if inviter['invites'] >= 2 and not inviter.get('has_no_watermark', False):
-                        inviter['has_no_watermark'] = True
-                        update_user(inviter_id, inviter)
-                        bot.send_message(inviter_id, 
-                            "🎉 CONGRATULATIONS!\n\n"
-                            "You've invited 2 friends!\n"
-                            "✅ Watermark REMOVED forever!\n"
-                            "Your future images will have NO watermark! 🎨")
-
-    # Send welcome message
-    welcome_text = f"""
-🎉 *Welcome to idx Empire BG Remover* 🎉
-
-✨ *Features:*
-• AI Background Removal
-• Multiple Color Options  
-• High Quality Output
-• 100% Free Forever
-
-🎁 *Invite Reward System:*
-Invite 2 friends → Remove watermark forever!
-
-📊 *Your Status:*
-✅ Invites: {user.get('invites', 0)}/2
-{'✅' if user.get('has_no_watermark') else '⚠️'} Watermark: {'OFF 🎉' if user.get('has_no_watermark') else 'ON'}
-
-🔗 Your invite: /invite
-🖼️ Try now: Send me a photo!
-
-📢 Updates: {os.getenv('CHANNEL_USERNAME', '@idxempire_updates')}
-💬 Support: {os.getenv('GROUP_USERNAME', '@idxempire_support')}
-    """
-    
-    # Create keyboard
-    keyboard = types.InlineKeyboardMarkup(row_width=2)
-    keyboard.add(
-        types.InlineKeyboardButton("📢 Join Channel", url=f"https://t.me/{os.getenv('CHANNEL_USERNAME', 'idxempire_updates')[1:]}"),
-        types.InlineKeyboardButton("👥 Join Group", url=f"https://t.me/{os.getenv('GROUP_USERNAME', 'idxempire_support')[1:]}")
-    )
-    keyboard.add(types.InlineKeyboardButton("🎨 Try Now", callback_data="try_now"))
-    
-    # Send welcome with animation
-    try:
-        with open('assets/welcome.jpg', 'rb') as photo:
-            bot.send_photo(message.chat.id, photo, 
-                          caption=welcome_text, 
-                          reply_markup=keyboard,
-                          parse_mode='Markdown')
-    except:
-        bot.send_message(message.chat.id, welcome_text, 
-                        reply_markup=keyboard,
-                        parse_mode='Markdown')
-
-@bot.message_handler(commands=['invite'])
-def handle_invite(message):
-    user_id = message.from_user.id
-    user = get_user(user_id)
-    
-    invite_text = f"""
-📤 *YOUR INVITE LINK*
-
-Share this link with friends:
-`https://t.me/{(bot.get_me()).username}?start=ref_{user['invite_code']}`
-
-🎯 *Progress:* {user.get('invites', 0)}/2 invites
-🏆 *Reward:* Remove watermark forever!
-
-📊 *Your Stats:*
-• Images processed: {user.get('images_processed', 0)}
-• Invites completed: {user.get('invites', 0)}
-• Watermark status: {'✅ OFF' if user.get('has_no_watermark') else '⚠️ ON'}
-
-💡 *Tip:* Share in groups, with friends!
-    """
-    
-    keyboard = types.InlineKeyboardMarkup()
-    keyboard.add(types.InlineKeyboardButton("📤 Share Link", 
-        url=f"https://t.me/share/url?url=https://t.me/{(bot.get_me()).username}?start=ref_{user['invite_code']}&text=Remove%20backgrounds%20for%20free%20with%20this%20bot!%20🎨"))
-    
-    bot.send_message(message.chat.id, invite_text, 
-                    reply_markup=keyboard,
-                    parse_mode='Markdown')
-
-@bot.message_handler(commands=['info'])
-def handle_info(message):
-    user_id = message.from_user.id
-    user = get_user(user_id)
-    
-    info_text = f"""
-👤 *YOUR PROFILE*
-
-📝 Name: {message.from_user.first_name} {f'(@{message.from_user.username})' if message.from_user.username else ''}
-📅 Joined: {user.get('join_date', 'Today')}
-🖼️ Images: {user.get('images_processed', 0)} processed
-👥 Invites: {user.get('invites', 0)}/2 completed
-💧 Watermark: {'✅ REMOVED 🎉' if user.get('has_no_watermark') else '⚠️ ACTIVE'}
-
-{'🎉 Congratulations! Watermark is removed forever!' if user.get('has_no_watermark') else f'🎯 Need {2 - user.get("invites", 0)} more invite(s) to remove watermark!'}
-
-🔗 Invite link: /invite
-📊 Leaderboard: /leaderboard
-    """
-    
-    bot.send_message(message.chat.id, info_text, parse_mode='Markdown')
-
-@bot.message_handler(commands=['leaderboard'])
-def handle_leaderboard(message):
-    users = load_users()
-    
-    # Sort by invites
-    sorted_users = sorted(users.items(), 
-                         key=lambda x: x[1].get('invites', 0), 
-                         reverse=True)[:10]
-    
-    leaderboard_text = "🏆 *INVITE LEADERBOARD*\n\n"
-    
-    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
-    
-    for i, (user_id, user_data) in enumerate(sorted_users):
-        if i < len(medals):
-            username = user_data.get('username', f'User{user_id[:5]}')
-            leaderboard_text += f"{medals[i]} {username}: {user_data.get('invites', 0)} invites\n"
-    
-    leaderboard_text += "\n🎯 Goal: Invite 2 friends to remove watermark!\n"
-    leaderboard_text += "🔗 Your invite: /invite"
-    
-    bot.send_message(message.chat.id, leaderboard_text, parse_mode='Markdown')
-
-@bot.message_handler(commands=['broadcast'])
-def handle_broadcast(message):
-    if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "⛔ Admin only command!")
-        return
-    
-    # Ask for broadcast message
-    msg = bot.reply_to(message, "📢 *BROADCAST MESSAGE*\n\nType your message to send to all users:", parse_mode='Markdown')
-    bot.register_next_step_handler(msg, process_broadcast)
-
-def process_broadcast(message):
-    users = load_users()
-    total = len(users)
-    success = 0
-    failed = 0
-    
-    bot.send_message(message.chat.id, f"📤 Sending to {total} users...")
-    
-    for user_id_str in users.keys():
-        try:
-            bot.copy_message(user_id_str, message.chat.id, message.message_id)
-            success += 1
-        except:
-            failed += 1
-        time.sleep(0.05)  # Avoid rate limit
-    
-    bot.send_message(message.chat.id, 
-                    f"✅ Broadcast completed!\n\n"
-                    f"📊 Results:\n"
-                    f"• Total users: {total}\n"
-                    f"• Successfully sent: {success}\n"
-                    f"• Failed: {failed}")
-
-@bot.message_handler(commands=['stats'])
-def handle_stats(message):
-    if message.from_user.id != ADMIN_ID:
-        bot.reply_to(message, "⛔ Admin only command!")
-        return
-    
-    users = load_users()
-    total_users = len(users)
-    users_with_reward = sum(1 for u in users.values() if u.get('has_no_watermark', False))
-    total_images = sum(u.get('images_processed', 0) for u in users.values())
-    total_invites = sum(u.get('invites', 0) for u in users.values())
-    
-    stats_text = f"""
-📊 *BOT STATISTICS*
-
-👥 Users: {total_users}
-🎉 Watermark removed: {users_with_reward}
-🖼️ Total images: {total_images}
-👥 Total invites: {total_invites}
-
-📈 Conversion Rate: {(users_with_reward/total_users*100 if total_users > 0 else 0):.1f}%
-👤 Avg. invites/user: {(total_invites/total_users if total_users > 0 else 0):.1f}
-
-💡 Top 3 Inviters: /leaderboard
-    """
-    
-    bot.send_message(message.chat.id, stats_text, parse_mode='Markdown')
-
-@bot.message_handler(commands=['help'])
-def handle_help(message):
-    help_text = """
-🆘 *HELP & COMMANDS*
-
-🤖 *BOT COMMANDS:*
-/start - Start the bot
-/invite - Get your invite link
-/info - Check your profile
-/leaderboard - See top inviters
-/help - This help message
-
-🎨 *HOW TO USE:*
-1. Send me any photo
-2. I'll remove background automatically
-3. Choose color/transparent option
-4. Download processed image
-
-💧 *WATERMARK SYSTEM:*
-• New users: Watermark on images
-• Invite 2 friends: Watermark removed forever!
-• Check status: /info
-
-📢 *SUPPORT:*
-• Updates: {channel}
-• Community: {group}
-• Issues: Contact @admin
-
-🎯 *TIPS:*
-• Use good quality photos
-• Portrait photos work best
-• Share with friends using /invite
-    """.format(
-        channel=os.getenv('CHANNEL_USERNAME', '@idxempire_updates'),
-        group=os.getenv('GROUP_USERNAME', '@idxempire_support')
-    )
-    
-    bot.send_message(message.chat.id, help_text, parse_mode='Markdown')
-
-# ==================== PHOTO PROCESSING ====================
-
-@bot.message_handler(content_types=['photo'])
-def handle_photo(message):
-    user_id = message.from_user.id
-    user = get_user(user_id)
-    
-    # Check daily limit
-    if user.get('images_processed', 0) >= int(os.getenv('DAILY_LIMIT', 50)):
-        bot.reply_to(message, 
-                    "⚠️ *Daily limit reached!*\n\n"
-                    "You've processed 50 images today.\n"
-                    "Limit resets at midnight.\n\n"
-                    "🎁 Want unlimited? Invite 2 friends using /invite!",
-                    parse_mode='Markdown')
-        return
-    
-    # Get photo file
-    file_info = bot.get_file(message.photo[-1].file_id)
-    downloaded_file = bot.download_file(file_info.file_path)
-    
-    # Check file size
-    file_size_mb = len(downloaded_file) / (1024 * 1024)
-    if file_size_mb > int(os.getenv('MAX_FILE_SIZE', 10)):
-        bot.reply_to(message, 
-                    f"⚠️ *File too large!*\n\n"
-                    f"Size: {file_size_mb:.1f}MB\n"
-                    f"Max allowed: {os.getenv('MAX_FILE_SIZE', 10)}MB\n\n"
-                    f"Please send a smaller image.")
-        return
-    
-    # Process image
-    processing_msg = bot.reply_to(message, "🔄 Processing your image...\n⏳ Estimated: 5-8 seconds")
-    
-    try:
+        # First pass with rembg
+        input_image = Image.open(io.BytesIO(image_bytes))
+        
+        # Resize for better quality (max 2000px while maintaining aspect ratio)
+        max_size = 2000
+        ratio = min(max_size / input_image.width, max_size / input_image.height)
+        if ratio < 1:
+            new_size = (int(input_image.width * ratio), int(input_image.height * ratio))
+            input_image = input_image.resize(new_size, Image.Resampling.LANCZOS)
+        
         # Remove background
-        processed_image = process_image(downloaded_file)
-        
-        # Check watermark status
-        apply_watermark = not user.get('has_no_watermark', False)
-        
-        # Update user stats
-        update_user(user_id, {
-            'images_processed': user.get('images_processed', 0) + 1
-        })
-        
-        # Ask for output format
-        keyboard = types.InlineKeyboardMarkup(row_width=2)
-        keyboard.add(
-            types.InlineKeyboardButton("⬜ Transparent", callback_data=f"format_transparent_{apply_watermark}"),
-            types.InlineKeyboardButton("⚪ White BG", callback_data=f"format_white_{apply_watermark}"),
-            types.InlineKeyboardButton("🎨 Colors", callback_data=f"show_colors_{apply_watermark}")
+        output_image = remove(
+            input_image,
+            alpha_matting=True,
+            alpha_matting_foreground_threshold=240,
+            alpha_matting_background_threshold=10,
+            alpha_matting_erode_structure_size=10,
+            alpha_matting_base_size=1000,
+            post_process_mask=True
         )
         
-        bot.delete_message(message.chat.id, processing_msg.message_id)
+        # Convert to RGBA for transparency
+        if output_image.mode != 'RGBA':
+            output_image = output_image.convert('RGBA')
         
-        watermark_status = "⚠️ With watermark" if apply_watermark else "✅ No watermark"
+        # Edge refinement using OpenCV
+        cv_image = cv2.cvtColor(np.array(output_image), cv2.COLOR_RGBA2BGRA)
         
-        bot.send_message(message.chat.id,
-                        f"✅ *Background removed!*\n\n"
-                        f"📊 Stats: Image #{user.get('images_processed', 0) + 1}\n"
-                        f"💧 Status: {watermark_status}\n\n"
-                        f"🎨 *Choose output format:*",
-                        reply_markup=keyboard,
-                        parse_mode='Markdown')
+        # Apply Gaussian blur to alpha channel for smooth edges
+        alpha = cv_image[:, :, 3]
+        alpha = cv2.GaussianBlur(alpha, (3, 3), 0)
+        cv_image[:, :, 3] = alpha
         
-        # Save temp image for callback
-        file_manager.save_temp_image(user_id, processed_image)
+        # Convert back to PIL
+        enhanced_image = Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGRA2RGBA))
+        
+        return enhanced_image
         
     except Exception as e:
-        bot.delete_message(message.chat.id, processing_msg.message_id)
-        bot.reply_to(message, f"❌ Error processing image:\n{str(e)}")
+        logger.error(f"Error in bg removal: {e}")
+        return None
 
-@bot.callback_query_handler(func=lambda call: True)
-def handle_callback(call):
-    user_id = call.from_user.id
-    user = get_user(user_id)
+# Welcome message handler
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name
     
-    if call.data == "try_now":
-        bot.answer_callback_query(call.id, "Send me a photo to get started! 📸")
+    welcome_text = f"""
+🎉 **Welcome {user_name}!** 🎉
+
+🤖 **Background Remover Bot**
+
+📸 **Meri Features:**
+• High Quality Background Removal
+• PNG Format with Transparency
+• Fast Processing
+• Support for Photos & Documents
+
+⚡ **How to Use:**
+1. Simply send me any photo
+2. I'll remove the background automatically
+3. You'll get transparent PNG image
+
+📎 **You can send:**
+• Photos (compressed/uncompressed)
+• Document images (PNG, JPG, WEBP)
+• Multiple photos at once
+
+🛠 **Commands:**
+/start - Show this welcome message
+/help - Get help
+/about - About this bot
+/stats - Your usage statistics
+
+🔧 **Tips for Best Results:**
+• Good lighting photos work best
+• Clear subject edges
+• Avoid similar background colors
+
+🌟 **Enjoy using the bot!**"""
     
-    elif call.data.startswith("format_"):
-        # Get format from callback
-        parts = call.data.split("_")
-        if len(parts) >= 3:
-            format_type = parts[1]
-            apply_watermark = parts[2] == "True"
+    # Send welcome message with photo
+    try:
+        # Send welcome image
+        welcome_img_url = "https://raw.githubusercontent.com/danielgatis/rembg/main/images/icon.png"
+        img_data = requests.get(welcome_img_url).content
+        
+        bot.send_photo(
+            message.chat.id,
+            img_data,
+            caption=welcome_text,
+            parse_mode='Markdown',
+            reply_markup=create_main_keyboard()
+        )
+        
+        # Initialize user stats
+        if user_id not in user_data:
+            user_data[user_id] = {
+                'name': user_name,
+                'images_processed': 0,
+                'first_seen': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'last_active': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
             
-            # Get temp image
-            temp_image = file_manager.get_temp_image(user_id)
-            if not temp_image:
-                bot.answer_callback_query(call.id, "❌ Image expired. Please send again.")
-                return
-            
-            # Process based on format
-            if format_type == "transparent":
-                final_image = temp_image
-            elif format_type == "white":
-                final_image = add_color_background(temp_image, (255, 255, 255))
+        logger.info(f"New user: {user_name} (ID: {user_id})")
+        
+    except Exception as e:
+        logger.error(f"Welcome error: {e}")
+        bot.reply_to(message, welcome_text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['about'])
+def about_bot(message):
+    about_text = """
+🤖 **About This Bot**
+
+**Version:** 2.0 High Quality
+**Engine:** U2-Net + OpenCV Enhancement
+**Features:** 
+• Advanced Alpha Matting
+• Edge Refinement
+• Smart Resizing
+• Multi-format Support
+
+🛠 **Technology Stack:**
+• Python 3.10
+• Rembg Library
+• OpenCV for enhancement
+• Flask server
+
+📊 **Statistics:**
+• Total Users: {}
+• Images Processed: {}
+
+❤️ **Open Source Project**
+For feedback: Contact @YourUsername""".format(len(user_data), sum([u['images_processed'] for u in user_data.values()]))
+    
+    bot.reply_to(message, about_text, parse_mode='Markdown')
+
+@bot.message_handler(commands=['stats'])
+def user_stats(message):
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name
+    
+    if user_id in user_data:
+        stats = user_data[user_id]
+        stats_text = f"""
+📊 **Your Statistics**
+
+👤 **User:** {user_name}
+🆔 **ID:** `{user_id}`
+📸 **Images Processed:** {stats['images_processed']}
+📅 **First Seen:** {stats['first_seen']}
+⏰ **Last Active:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+🎯 **Rank:** {'⭐' * min(5, stats['images_processed'] // 10 + 1)}"""
+    else:
+        stats_text = "No statistics found. Send /start first!"
+    
+    bot.reply_to(message, stats_text, parse_mode='Markdown')
+
+def create_main_keyboard():
+    keyboard = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    btn1 = types.KeyboardButton("📸 Remove BG")
+    btn2 = types.KeyboardButton("ℹ️ Help")
+    btn3 = types.KeyboardButton("📊 Stats")
+    btn4 = types.KeyboardButton("🛠 About")
+    keyboard.add(btn1, btn2, btn3, btn4)
+    return keyboard
+
+# Handle all photos and documents
+@bot.message_handler(content_types=['photo', 'document'])
+def handle_docs_photos(message):
+    try:
+        user_id = message.from_user.id
+        
+        # Update last active
+        if user_id in user_data:
+            user_data[user_id]['last_active'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # Send processing message
+        processing_msg = bot.reply_to(
+            message, 
+            "🔄 Processing your image...\n\n⚡ _High quality removal in progress_", 
+            parse_mode='Markdown'
+        )
+        
+        file_id = None
+        
+        # Get file based on content type
+        if message.content_type == 'photo':
+            file_id = message.photo[-1].file_id
+        elif message.content_type == 'document':
+            if message.document.mime_type.startswith('image/'):
+                file_id = message.document.file_id
             else:
-                bot.answer_callback_query(call.id, "Unknown format")
+                bot.reply_to(message, "❌ Please send only image files!")
                 return
+        
+        if not file_id:
+            bot.reply_to(message, "❌ Could not get image!")
+            return
+        
+        # Download file
+        file_info = bot.get_file(file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        
+        # Update processing message
+        bot.edit_message_text(
+            "🎨 Removing background with enhanced algorithm...", 
+            message.chat.id, 
+            processing_msg.message_id
+        )
+        
+        # Process image
+        result_image = enhance_bg_removal(downloaded_file)
+        
+        if result_image:
+            # Save to bytes
+            img_byte_arr = io.BytesIO()
+            result_image.save(img_byte_arr, format='PNG', optimize=True)
+            img_byte_arr.seek(0)
             
-            # Add watermark if needed
-            if apply_watermark:
-                final_image = add_watermark(final_image, os.getenv('WATERMARK_TEXT', 'idx Empire'))
+            # Update stats
+            if user_id in user_data:
+                user_data[user_id]['images_processed'] += 1
             
-            # Send image
-            bot.send_photo(call.message.chat.id, final_image,
-                          caption=f"✅ Processed successfully!\n"
-                                 f"📊 Your total: {user.get('images_processed', 0)} images\n"
-                                 f"{'💧 Watermark: ON' if apply_watermark else '🎉 Watermark: OFF'}\n\n"
-                                 f"🔄 Process another? Send another photo!")
+            # Send result
+            bot.edit_message_text(
+                "✅ Background removed successfully!\n📤 Sending image...", 
+                message.chat.id, 
+                processing_msg.message_id
+            )
             
-            # Clean temp
-            file_manager.delete_temp_image(user_id)
+            # Send image with caption
+            caption = f"""
+✅ **Background Removed Successfully!**
+
+👤 User: {message.from_user.first_name}
+📊 Processed Images: {user_data.get(user_id, {}).get('images_processed', 1)}
+🖼 Format: PNG with Transparency
+💾 Size: {len(img_byte_arr.getvalue()) // 1024} KB
+
+✨ _Tip: Save image for transparent background_"""
+            
+            bot.send_document(
+                message.chat.id,
+                (f"bg_removed_{message.message_id}.png", img_byte_arr),
+                caption=caption,
+                parse_mode='Markdown',
+                reply_markup=create_main_keyboard()
+            )
+            
+            # Delete processing message
+            bot.delete_message(message.chat.id, processing_msg.message_id)
+            
+        else:
+            bot.edit_message_text(
+                "❌ Failed to process image. Please try with a different image.", 
+                message.chat.id, 
+                processing_msg.message_id
+            )
+            
+    except Exception as e:
+        logger.error(f"Processing error: {e}")
+        bot.reply_to(message, f"❌ Error: {str(e)}")
+
+# Text message handler
+@bot.message_handler(func=lambda message: True)
+def handle_text(message):
+    if message.text == "📸 Remove BG":
+        bot.reply_to(message, "📸 Please send me an image to remove background!")
+    elif message.text == "ℹ️ Help":
+        send_welcome(message)
+    elif message.text == "📊 Stats":
+        user_stats(message)
+    elif message.text == "🛠 About":
+        about_bot(message)
+    else:
+        bot.reply_to(
+            message, 
+            "🤖 Send me an image or use the buttons below!",
+            reply_markup=create_main_keyboard()
+        )
+
+# Flask routes for Render
+@app.route('/')
+def home():
+    return "🤖 Background Remover Bot is Running!"
+
+@app.route('/health')
+def health():
+    return {"status": "healthy", "users": len(user_data)}
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return ''
+    else:
+        return 'Bad Request', 400
+
+# Start bot with polling (for Render)
+def run_bot():
+    logger.info("Starting bot...")
     
-    elif call.data.startswith("show_colors_"):
-        # Show color options
-        keyboard = types.InlineKeyboardMarkup(row_width=3)
-        colors = [
-            ("🔴 Red", (255, 0, 0)),
-            ("🟠 Orange", (255, 165, 0)),
-            ("🟡 Yellow", (255, 255, 0)),
-            ("🟢 Green", (0, 255, 0)),
-            ("🔵 Blue", (0, 0, 255)),
-            ("🟣 Purple", (128, 0, 128)),
-            ("🟤 Brown", (165, 42, 42)),
-            ("⚫ Black", (0, 0, 0)),
-            ("⚪ White", (255, 255, 255))
-        ]
-        
-        apply_watermark = call.data.split("_")[2] == "True"
-        
-        for color_name, color_rgb in colors:
-            keyboard.add(types.InlineKeyboardButton(color_name, 
-                callback_data=f"color_{color_rgb[0]}_{color_rgb[1]}_{color_rgb[2]}_{apply_watermark}"))
-        
-        bot.edit_message_text("🎨 Select a color for background:",
-                            call.message.chat.id,
-                            call.message.message_id,
-                            reply_markup=keyboard)
+    # Remove previous webhook
+    bot.remove_webhook()
     
-    elif call.data.startswith("color_"):
-        # Get color from callback
-        parts = call.data.split("_")
-        if len(parts) >= 5:
-            color_rgb = (int(parts[1]), int(parts[2]), int(parts[3]))
-            apply_watermark = parts[4] == "True"
-            
-            # Get temp image
-            temp_image = file_manager.get_temp_image(user_id)
-            if not temp_image:
-                bot.answer_callback_query(call.id, "❌ Image expired. Please send again.")
-                return
-            
-            # Add color background
-            final_image = add_color_background(temp_image, color_rgb)
-            
-            # Add watermark if needed
-            if apply_watermark:
-                final_image = add_watermark(final_image, os.getenv('WATERMARK_TEXT', 'idx Empire'))
-            
-            # Send image
-            bot.send_photo(call.message.chat.id, final_image,
-                          caption=f"✅ Colored background added!\n"
-                                 f"📊 Your total: {user.get('images_processed', 0)} images\n"
-                                 f"{'💧 Watermark: ON' if apply_watermark else '🎉 Watermark: OFF'}\n\n"
-                                 f"🔄 Process another? Send another photo!")
-            
-            # Clean temp
-            file_manager.delete_temp_image(user_id)
+    # Get Render port
+    port = int(os.environ.get("PORT", 5000))
     
-    bot.answer_callback_query(call.id)
+    # Set webhook for Render
+    render_domain = os.environ.get('RENDER_EXTERNAL_URL')
+    if render_domain:
+        webhook_url = f"{render_domain}/webhook"
+        bot.set_webhook(url=webhook_url)
+        logger.info(f"Webhook set to: {webhook_url}")
+    else:
+        # Use polling as fallback
+        logger.info("Using polling method")
+        bot.polling(none_stop=True, timeout=60)
 
-# ==================== GROUP HANDLING ====================
-
-@bot.message_handler(content_types=['new_chat_members'])
-def handle_new_members(message):
-    if bot.get_me().id in [user.id for user in message.new_chat_members]:
-        # Bot added to group
-        welcome_text = f"""
-👋 Hello *{message.chat.title}*!
-
-I'm *idx Empire BG Remover Bot* 🤖
-
-✨ I can remove backgrounds from any photo instantly!
-
-📌 *How to use in group:*
-1. Send me any photo in this chat
-2. I'll remove background automatically
-3. Choose color/transparent option
-4. Download processed image
-
-💡 *Tips:*
-• I work in PM for better privacy
-• Use /invite to remove watermark
-• Join {os.getenv('CHANNEL_USERNAME')} for updates
-
-🎨 Send a photo to try now!
-        """
-        
-        bot.send_message(message.chat.id, welcome_text, parse_mode='Markdown')
-        
-        # Save group info
-        groups = file_manager.load_json('groups.json')
-        group_id = str(message.chat.id)
-        groups[group_id] = {
-            'title': message.chat.title,
-            'members': message.chat.member_count,
-            'added_date': datetime.now().strftime('%Y-%m-%d'),
-            'last_active': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-        file_manager.save_json('groups.json', groups)
-
-# ==================== START BOT ====================
-
-def start_bot():
-    print("🤖 Bot is starting...")
-    print(f"👑 Admin ID: {ADMIN_ID}")
-    print(f"💧 Watermark: {os.getenv('WATERMARK_TEXT', 'idx Empire')}")
+if __name__ == '__main__':
+    # Run Flask app
+    port = int(os.environ.get("PORT", 5000))
+    logger.info(f"Starting server on port {port}")
     
-    # Start polling
-    bot.polling(none_stop=True, interval=0)
-
-if __name__ == "__main__":
-    start_bot()
+    # Run in thread
+    from threading import Thread
+    bot_thread = Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    # Run Flask
+    app.run(host='0.0.0.0', port=port, debug=False)
