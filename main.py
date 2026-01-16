@@ -2,43 +2,41 @@ import os
 import io
 import logging
 from PIL import Image
-import asyncio
 from flask import Flask, request
 import telebot
 from telebot import types
 import requests
 from rembg import remove
-import cv2
-import numpy as np
-from datetime import datetime
+import threading
+import time
 
-# Setup logging
+# ========== SETUP ==========
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Flask app for Render port detection
 app = Flask(__name__)
 
-# Bot token (Render Environment Variable se)
-BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
-bot = telebot.TeleBot(BOT_TOKEN)
+# Bot token
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+if not BOT_TOKEN:
+    logger.error("❌ BOT_TOKEN not set!")
+    BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 
-# Store user data
+bot = telebot.TeleBot(BOT_TOKEN)
 user_data = {}
 
-# Enhanced BG Removal with quality improvement
-def enhance_bg_removal(image_bytes):
+# ========== BG REMOVAL ==========
+def remove_background(image_bytes):
     try:
-        # First pass with rembg
         input_image = Image.open(io.BytesIO(image_bytes))
         
-        # Resize for better quality (max 2000px while maintaining aspect ratio)
-        max_size = 2000
-        ratio = min(max_size / input_image.width, max_size / input_image.height)
-        if ratio < 1:
+        # Resize if too large
+        max_size = 1500
+        if max(input_image.size) > max_size:
+            ratio = max_size / max(input_image.size)
             new_size = (int(input_image.width * ratio), int(input_image.height * ratio))
             input_image = input_image.resize(new_size, Image.Resampling.LANCZOS)
         
@@ -48,283 +46,253 @@ def enhance_bg_removal(image_bytes):
             alpha_matting=True,
             alpha_matting_foreground_threshold=240,
             alpha_matting_background_threshold=10,
-            alpha_matting_erode_structure_size=10,
-            alpha_matting_base_size=1000,
             post_process_mask=True
         )
         
-        # Convert to RGBA for transparency
+        # Ensure transparency
         if output_image.mode != 'RGBA':
             output_image = output_image.convert('RGBA')
         
-        # Edge refinement using OpenCV
-        cv_image = cv2.cvtColor(np.array(output_image), cv2.COLOR_RGBA2BGRA)
-        
-        # Apply Gaussian blur to alpha channel for smooth edges
-        alpha = cv_image[:, :, 3]
-        alpha = cv2.GaussianBlur(alpha, (3, 3), 0)
-        cv_image[:, :, 3] = alpha
-        
-        # Convert back to PIL
-        enhanced_image = Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGRA2RGBA))
-        
-        return enhanced_image
-        
+        return output_image
     except Exception as e:
-        logger.error(f"Error in bg removal: {e}")
+        logger.error(f"BG removal error: {e}")
         return None
 
-# Welcome message handler
+# ========== BOT HANDLERS ==========
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     user_id = message.from_user.id
     user_name = message.from_user.first_name
     
     welcome_text = f"""
-🎉 **Welcome {user_name}!** 🎉
+🎉 *Welcome {user_name}!* 🎉
 
-🤖 **Background Remover Bot**
+🤖 *Background Remover Bot*
 
-📸 **Meri Features:**
+📸 *Features:*
 • High Quality Background Removal
-• PNG Format with Transparency
+• PNG with Transparency
 • Fast Processing
-• Support for Photos & Documents
+• Free to Use
 
-⚡ **How to Use:**
-1. Simply send me any photo
-2. I'll remove the background automatically
-3. You'll get transparent PNG image
+⚡ *How to Use:*
+1. Send me any photo
+2. I'll remove background
+3. Get transparent PNG
 
-📎 **You can send:**
-• Photos (compressed/uncompressed)
-• Document images (PNG, JPG, WEBP)
-• Multiple photos at once
+📎 *Supported:*
+• Photos (JPG, PNG, WEBP)
+• Good lighting works best
 
-🛠 **Commands:**
-/start - Show this welcome message
-/help - Get help
-/about - About this bot
-/stats - Your usage statistics
-
-🔧 **Tips for Best Results:**
-• Good lighting photos work best
-• Clear subject edges
-• Avoid similar background colors
-
-🌟 **Enjoy using the bot!**"""
+🌟 *Send a photo to start!*"""
     
-    # Send welcome message with photo
-    try:
-        # Send welcome image
-        welcome_img_url = "https://raw.githubusercontent.com/danielgatis/rembg/main/images/icon.png"
-        img_data = requests.get(welcome_img_url).content
-        
-        bot.send_photo(
-            message.chat.id,
-            img_data,
-            caption=welcome_text,
-            parse_mode='Markdown',
-            reply_markup=create_main_keyboard()
-        )
-        
-        # Initialize user stats
-        if user_id not in user_data:
-            user_data[user_id] = {
-                'name': user_name,
-                'images_processed': 0,
-                'first_seen': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                'last_active': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-        logger.info(f"New user: {user_name} (ID: {user_id})")
-        
-    except Exception as e:
-        logger.error(f"Welcome error: {e}")
-        bot.reply_to(message, welcome_text, parse_mode='Markdown')
+    if user_id not in user_data:
+        user_data[user_id] = {
+            'name': user_name,
+            'processed': 0,
+            'first_seen': time.time()
+        }
+    
+    bot.send_message(
+        message.chat.id,
+        welcome_text,
+        parse_mode='Markdown',
+        reply_markup=create_keyboard()
+    )
 
 @bot.message_handler(commands=['about'])
 def about_bot(message):
-    about_text = """
-🤖 **About This Bot**
-
-**Version:** 2.0 High Quality
-**Engine:** U2-Net + OpenCV Enhancement
-**Features:** 
-• Advanced Alpha Matting
-• Edge Refinement
-• Smart Resizing
-• Multi-format Support
-
-🛠 **Technology Stack:**
-• Python 3.10
-• Rembg Library
-• OpenCV for enhancement
-• Flask server
-
-📊 **Statistics:**
-• Total Users: {}
-• Images Processed: {}
-
-❤️ **Open Source Project**
-For feedback: Contact @YourUsername""".format(len(user_data), sum([u['images_processed'] for u in user_data.values()]))
+    total_users = len(user_data)
+    total_images = sum(user['processed'] for user in user_data.values())
     
+    about_text = f"""
+🤖 *About This Bot*
+
+*Version:* 3.0
+*Engine:* AI-Powered
+*Users:* {total_users}
+*Images Processed:* {total_images}
+
+*Hosted on:* Render.com
+*Status:* ✅ Running
+"""
     bot.reply_to(message, about_text, parse_mode='Markdown')
 
 @bot.message_handler(commands=['stats'])
 def user_stats(message):
     user_id = message.from_user.id
-    user_name = message.from_user.first_name
     
     if user_id in user_data:
         stats = user_data[user_id]
         stats_text = f"""
-📊 **Your Statistics**
+📊 *Your Stats*
 
-👤 **User:** {user_name}
-🆔 **ID:** `{user_id}`
-📸 **Images Processed:** {stats['images_processed']}
-📅 **First Seen:** {stats['first_seen']}
-⏰ **Last Active:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-
-🎯 **Rank:** {'⭐' * min(5, stats['images_processed'] // 10 + 1)}"""
+👤 Name: {stats['name']}
+📸 Processed: {stats['processed']} images
+⏰ Active: {time.strftime('%Y-%m-%d %H:%M', time.localtime(stats.get('last_active', stats['first_seen'])))}
+"""
     else:
-        stats_text = "No statistics found. Send /start first!"
+        stats_text = "Send /start first!"
     
     bot.reply_to(message, stats_text, parse_mode='Markdown')
 
-def create_main_keyboard():
+def create_keyboard():
     keyboard = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    btn1 = types.KeyboardButton("📸 Remove BG")
-    btn2 = types.KeyboardButton("ℹ️ Help")
-    btn3 = types.KeyboardButton("📊 Stats")
-    btn4 = types.KeyboardButton("🛠 About")
-    keyboard.add(btn1, btn2, btn3, btn4)
+    keyboard.add(
+        types.KeyboardButton("📸 Remove BG"),
+        types.KeyboardButton("ℹ️ Help"),
+        types.KeyboardButton("📊 Stats"),
+        types.KeyboardButton("🛠 About")
+    )
     return keyboard
 
-# Handle all photos and documents
-@bot.message_handler(content_types=['photo', 'document'])
-def handle_docs_photos(message):
+# ========== PHOTO PROCESSING ==========
+@bot.message_handler(content_types=['photo'])
+def handle_photo(message):
     try:
         user_id = message.from_user.id
         
-        # Update last active
+        # Update stats
         if user_id in user_data:
-            user_data[user_id]['last_active'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            user_data[user_id]['last_active'] = time.time()
+        else:
+            user_data[user_id] = {
+                'name': message.from_user.first_name,
+                'processed': 0,
+                'first_seen': time.time(),
+                'last_active': time.time()
+            }
         
-        # Send processing message
+        # Send initial processing message
         processing_msg = bot.reply_to(
             message, 
-            "🔄 Processing your image...\n\n⚡ _High quality removal in progress_", 
+            "🔄 *Downloading image...*", 
             parse_mode='Markdown'
         )
         
-        file_id = None
-        
-        # Get file based on content type
-        if message.content_type == 'photo':
-            file_id = message.photo[-1].file_id
-        elif message.content_type == 'document':
-            if message.document.mime_type.startswith('image/'):
-                file_id = message.document.file_id
-            else:
-                bot.reply_to(message, "❌ Please send only image files!")
-                return
-        
-        if not file_id:
-            bot.reply_to(message, "❌ Could not get image!")
-            return
-        
-        # Download file
+        # Get photo
+        file_id = message.photo[-1].file_id
         file_info = bot.get_file(file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         
-        # Update processing message
-        bot.edit_message_text(
-            "🎨 Removing background with enhanced algorithm...", 
-            message.chat.id, 
-            processing_msg.message_id
-        )
+        # Update message to processing
+        try:
+            bot.edit_message_text(
+                "🎨 *Removing background...*", 
+                message.chat.id, 
+                processing_msg.message_id,
+                parse_mode='Markdown'
+            )
+        except:
+            pass  # Skip if edit fails
         
         # Process image
-        result_image = enhance_bg_removal(downloaded_file)
+        result_image = remove_background(downloaded_file)
         
         if result_image:
-            # Save to bytes
+            # Convert to bytes
             img_byte_arr = io.BytesIO()
             result_image.save(img_byte_arr, format='PNG', optimize=True)
             img_byte_arr.seek(0)
             
-            # Update stats
-            if user_id in user_data:
-                user_data[user_id]['images_processed'] += 1
+            # Update user stats
+            user_data[user_id]['processed'] += 1
+            
+            # Update message to final
+            try:
+                bot.edit_message_text(
+                    "✅ *Sending result...*", 
+                    message.chat.id, 
+                    processing_msg.message_id,
+                    parse_mode='Markdown'
+                )
+            except:
+                pass
             
             # Send result
-            bot.edit_message_text(
-                "✅ Background removed successfully!\n📤 Sending image...", 
-                message.chat.id, 
-                processing_msg.message_id
-            )
-            
-            # Send image with caption
             caption = f"""
-✅ **Background Removed Successfully!**
+✅ *Background Removed!*
 
 👤 User: {message.from_user.first_name}
-📊 Processed Images: {user_data.get(user_id, {}).get('images_processed', 1)}
-🖼 Format: PNG with Transparency
+📸 Total: {user_data[user_id]['processed']} images
 💾 Size: {len(img_byte_arr.getvalue()) // 1024} KB
-
-✨ _Tip: Save image for transparent background_"""
+🎉 *Save as PNG for transparency*"""
             
             bot.send_document(
                 message.chat.id,
-                (f"bg_removed_{message.message_id}.png", img_byte_arr),
+                document=img_byte_arr,
+                visible_file_name=f"no_bg_{user_id}.png",
                 caption=caption,
                 parse_mode='Markdown',
-                reply_markup=create_main_keyboard()
+                reply_markup=create_keyboard()
             )
             
             # Delete processing message
-            bot.delete_message(message.chat.id, processing_msg.message_id)
+            try:
+                bot.delete_message(message.chat.id, processing_msg.message_id)
+            except:
+                pass
             
         else:
             bot.edit_message_text(
-                "❌ Failed to process image. Please try with a different image.", 
+                "❌ *Failed to process image*\nTry another photo.", 
                 message.chat.id, 
-                processing_msg.message_id
+                processing_msg.message_id,
+                parse_mode='Markdown'
             )
             
     except Exception as e:
-        logger.error(f"Processing error: {e}")
-        bot.reply_to(message, f"❌ Error: {str(e)}")
+        logger.error(f"Error: {e}")
+        bot.reply_to(message, f"❌ Error: {str(e)[:200]}")
 
-# Text message handler
+# ========== TEXT MESSAGES ==========
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
-    if message.text == "📸 Remove BG":
-        bot.reply_to(message, "📸 Please send me an image to remove background!")
-    elif message.text == "ℹ️ Help":
+    text = message.text
+    
+    if text == "📸 Remove BG":
+        bot.reply_to(message, "📸 *Send me a photo!*", parse_mode='Markdown')
+    elif text == "ℹ️ Help":
         send_welcome(message)
-    elif message.text == "📊 Stats":
+    elif text == "📊 Stats":
         user_stats(message)
-    elif message.text == "🛠 About":
+    elif text == "🛠 About":
         about_bot(message)
     else:
         bot.reply_to(
             message, 
-            "🤖 Send me an image or use the buttons below!",
-            reply_markup=create_main_keyboard()
+            "🤖 *Send a photo or use buttons below!*", 
+            parse_mode='Markdown',
+            reply_markup=create_keyboard()
         )
 
-# Flask routes for Render
+# ========== WEB ROUTES ==========
 @app.route('/')
 def home():
-    return "🤖 Background Remover Bot is Running!"
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>BG Remover Bot</title>
+        <style>
+            body { font-family: Arial; text-align: center; padding: 50px; }
+            h1 { color: #0088cc; }
+            .status { background: green; color: white; padding: 10px; border-radius: 5px; }
+        </style>
+    </head>
+    <body>
+        <h1>🤖 Background Remover Bot</h1>
+        <p>Running on Render.com</p>
+        <div class="status">🟢 STATUS: ONLINE</div>
+        <p>Users: {}</p>
+        <p><a href="/health">Health Check</a></p>
+    </body>
+    </html>
+    """.format(len(user_data))
 
 @app.route('/health')
 def health():
-    return {"status": "healthy", "users": len(user_data)}
+    return {"status": "healthy", "users": len(user_data), "timestamp": time.time()}
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -332,41 +300,40 @@ def webhook():
         json_string = request.get_data().decode('utf-8')
         update = telebot.types.Update.de_json(json_string)
         bot.process_new_updates([update])
-        return ''
-    else:
-        return 'Bad Request', 400
+        return 'OK'
+    return 'ERROR'
 
-# Start bot with polling (for Render)
+# ========== START BOT ==========
 def run_bot():
-    logger.info("Starting bot...")
+    """Run bot with polling"""
+    logger.info("🤖 Starting bot...")
     
-    # Remove previous webhook
+    # Remove webhook and use polling
     bot.remove_webhook()
+    time.sleep(2)
     
-    # Get Render port
-    port = int(os.environ.get("PORT", 5000))
+    # Start polling
+    logger.info("🔄 Starting polling...")
+    bot.polling(none_stop=True, interval=3, timeout=30)
     
-    # Set webhook for Render
-    render_domain = os.environ.get('RENDER_EXTERNAL_URL')
-    if render_domain:
-        webhook_url = f"{render_domain}/webhook"
-        bot.set_webhook(url=webhook_url)
-        logger.info(f"Webhook set to: {webhook_url}")
-    else:
-        # Use polling as fallback
-        logger.info("Using polling method")
-        bot.polling(none_stop=True, timeout=60)
+    logger.error("❌ Polling stopped!")
 
+# ========== MAIN ==========
 if __name__ == '__main__':
-    # Run Flask app
-    port = int(os.environ.get("PORT", 5000))
-    logger.info(f"Starting server on port {port}")
-    
-    # Run in thread
-    from threading import Thread
-    bot_thread = Thread(target=run_bot)
-    bot_thread.daemon = True
+    # Start bot in thread
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
     
+    # Get port from Render
+    port = int(os.environ.get('PORT', 5000))
+    
+    logger.info(f"🚀 Starting Flask on port {port}")
+    
     # Run Flask
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(
+        host='0.0.0.0',
+        port=port,
+        debug=False,
+        threaded=True,
+        use_reloader=False
+          )
